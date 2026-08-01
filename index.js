@@ -294,6 +294,7 @@ if (!fs.existsSync(dbDir)) {
 }
 
 const db = new Database(dbPath);
+// redeploy trigger
 db.pragma('journal_mode = WAL');
 
 db.exec(`
