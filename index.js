@@ -3889,80 +3889,22 @@ bot.action('admin_backup', async (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
 
-  await ctx.reply('📦 در حال تهیه بکاپ کامل...');
-
   const fs = require('fs');
   const path = require('path');
 
   const dbPath = process.env.DB_PATH || '/data/bot.db';
-  const backupDir = '/tmp/backup_' + Date.now();
-  fs.mkdirSync(backupDir, { recursive: true });
 
-  // Copy database
-  const dbBackup = path.join(backupDir, 'bot.db');
-  fs.copyFileSync(dbPath, dbBackup);
+  if (!fs.existsSync(dbPath)) {
+    return ctx.reply('❌ فایل دیتابیس پیدا نشد');
+  }
 
-  // Export settings as JSON
-  const settings = db.prepare("SELECT key, value FROM settings").all();
-  const settingsBackup = path.join(backupDir, 'settings.json');
-  fs.writeFileSync(settingsBackup, JSON.stringify(settings, null, 2));
-
-  // Export users
-  const users = db.prepare("SELECT * FROM users").all();
-  const usersBackup = path.join(backupDir, 'users.json');
-  fs.writeFileSync(usersBackup, JSON.stringify(users, null, 2));
-
-  // Export orders
-  const orders = db.prepare("SELECT * FROM orders").all();
-  const ordersBackup = path.join(backupDir, 'orders.json');
-  fs.writeFileSync(ordersBackup, JSON.stringify(orders, null, 2));
-
-  // Export charges
-  const charges = db.prepare("SELECT * FROM charges").all();
-  const chargesBackup = path.join(backupDir, 'charges.json');
-  fs.writeFileSync(chargesBackup, JSON.stringify(charges, null, 2));
-
-  // Export plans
-  const plans = db.prepare("SELECT * FROM plans").all();
-  const plansBackup = path.join(backupDir, 'plans.json');
-  fs.writeFileSync(plansBackup, JSON.stringify(plans, null, 2));
-
-  // Export panels
-  const panels = db.prepare("SELECT * FROM panels").all();
-  const panelsBackup = path.join(backupDir, 'panels.json');
-  fs.writeFileSync(panelsBackup, JSON.stringify(panels, null, 2));
-
-  // Export free_trials
-  const trials = db.prepare("SELECT * FROM free_trials").all();
-  const trialsBackup = path.join(backupDir, 'trials.json');
-  fs.writeFileSync(trialsBackup, JSON.stringify(trials, null, 2));
-
-  // Export discount_codes
-  const discounts = db.prepare("SELECT * FROM discount_codes").all();
-  const discountsBackup = path.join(backupDir, 'discounts.json');
-  fs.writeFileSync(discountsBackup, JSON.stringify(discounts, null, 2));
-
-  // Create zip
-  const archiver = require('archiver');
-  const output = fs.createWriteStream(path.join(backupDir, 'backup.zip'));
-  const archive = archiver('zip', { zlib: { level: 9 } });
-
-  archive.pipe(output);
-  archive.directory(backupDir, false);
-  await archive.finalize();
-
-  await new Promise((resolve) => output.on('close', resolve));
-
-  // Send backup
+  // Send database file directly
   await ctx.replyWithDocument({
-    source: path.join(backupDir, 'backup.zip'),
-    filename: `vittori-bot-backup-${new Date().toISOString().split('T')[0]}.zip`
+    source: dbPath,
+    filename: 'bot.db'
   }, {
-    caption: `✅ بکاپ کامل انجام شد\n\n📅 ${new Date().toLocaleString('fa-IR')}\n👥 کاربران: ${users.length}\n📦 سفارشات: ${orders.length}\n💰 شارژها: ${charges.length}\n📋 پلن‌ها: ${plans.length}\n🖥 پنل‌ها: ${panels.length}\n🎁 تست‌ها: ${trials.length}\n🏷️ کدهای تخفیف: ${discounts.length}`
+    caption: `✅ بکاپ دیتابیس\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: bot.db\n\nبرای ریستور: این فایل رو به /data/bot.db کپی کنید`
   });
-
-  // Cleanup
-  fs.rmSync(backupDir, { recursive: true, force: true });
 });
 
 bot.catch((err, ctx) => {
