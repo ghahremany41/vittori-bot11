@@ -282,7 +282,18 @@ async function discoverGroupIds() {
   return discoveredGroupIds;
 }
 
-const db = new Database('/data/bot.db');
+const fs = require('fs');
+const path = require('path');
+
+// Database path with fallback
+const dbPath = process.env.DB_PATH || '/data/bot.db';
+const dbDir = path.dirname(dbPath);
+
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+
+const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
 db.exec(`
