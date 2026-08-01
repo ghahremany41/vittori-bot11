@@ -2187,16 +2187,22 @@ bot.on('photo', async (ctx) => {
       `👤 کاربر: @${escapeMarkdown(ctx.from.username || 'ندارد')} (${ctx.from.id})\n` +
       `💵 مبلغ: ${formatNumber(charge.amount)} تومان`;
 
-    await bot.telegram.sendPhoto(ADMIN_ID, receiptFileId, {
-      caption,
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([
-        [{ text: '✅ تایید شارژ', callback_data: `admin_confirm_${state.chargeId}`, style: 'success' }],
-        [{ text: '❌ رد شارژ', callback_data: `admin_reject_${state.chargeId}`, style: 'danger' }],
-      ]),
-    });
+    try {
+      await bot.telegram.sendPhoto(ADMIN_ID, receiptFileId, {
+        caption,
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [{ text: '✅ تایید شارژ', callback_data: `admin_confirm_${state.chargeId}`, style: 'success' }],
+          [{ text: '❌ رد شارژ', callback_data: `admin_reject_${state.chargeId}`, style: 'danger' }],
+        ]),
+      });
+      console.log('[CHARGE] Receipt sent to admin for charge:', state.chargeId);
+    } catch (err) {
+      console.error('[CHARGE] Failed to send to admin:', err.message);
+      return ctx.reply('❌ خطا در ارسال به ادمین. لطفاً دوباره تلاش کنید.');
+    }
 
-    ctx.reply('⏳ فیش واریزی شما ارسال شد. منتظر تایید ادمین باشید...', mainMenu());
+    ctx.reply('✅ فیش واریزی شما دریافت شد و به ادمین ارسال شد.\n⏳ منتظر تایید ادمین باشید...', mainMenu());
     delete userState[ctx.from.id];
     return;
   }
