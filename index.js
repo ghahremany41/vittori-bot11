@@ -1449,22 +1449,74 @@ bot.action('add_balance', (ctx) => {
 // Feature 1: Handle photo for welcome image
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
-  if (userId !== ADMIN_ID || !adminState[userId]) return;
-  if (adminState[userId].action !== 'edit_setting_welcome_image') return;
 
-  // Get the largest photo (last in array)
-  const photo = ctx.message.photo[ctx.message.photo.length - 1];
-  const fileId = photo.file_id;
+  // Admin welcome image
+  if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'edit_setting_welcome_image') {
+    const photo = ctx.message.photo[ctx.message.photo.length - 1];
+    const fileId = photo.file_id;
 
-  welcomeImage = fileId;
-  saveSettings();
-  delete adminState[userId];
+    welcomeImage = fileId;
+    saveSettings();
+    delete adminState[userId];
 
-  ctx.reply('✅ تصویر خوش‌آمدگویی با موفقیت تنظیم شد!');
-  try {
-    await ctx.reply(adminBotSettingsText(), { parse_mode: 'Markdown', ...adminBotSettingsKeyboard() });
-  } catch (_) {
-    await ctx.reply(adminBotSettingsText().replace(/[*_`]/g, ''), { ...adminBotSettingsKeyboard() });
+    ctx.reply('✅ تصویر خوش‌آمدگویی با موفقیت تنظیم شد!');
+    try {
+      await ctx.reply(adminBotSettingsText(), { parse_mode: 'Markdown', ...adminBotSettingsKeyboard() });
+    } catch (_) {
+      await ctx.reply(adminBotSettingsText().replace(/[*_`]/g, ''), { ...adminBotSettingsKeyboard() });
+    }
+    return;
+  }
+
+  // Admin trial QR
+  if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'add_trial_qr') {
+    const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+    adminState[userId].qrFileId = fileId;
+    adminState[userId].action = 'add_trial_link';
+    ctx.reply('✅ QR کد دریافت شد.\n\nمرحله ۲: لینک اشتراک را ارسال کنید:');
+    return;
+  }
+
+  // User charge receipt
+  if (botOff) {
+    return ctx.reply('🔴 ربات در حال حاضر خاموش است.\nلطفاً بعداً تلاش کنید.');
+  }
+
+  const state = userState[ctx.from.id];
+  if (state && state.action === 'wait_charge_receipt') {
+    const charge = db.prepare('SELECT * FROM charges WHERE id = ? AND status = ?').get(state.chargeId, 'pending');
+    if (!charge) {
+      delete userState[ctx.from.id];
+      return ctx.reply('❌ این درخواست قبلاً پردازش شده است.');
+    }
+
+    db.prepare('UPDATE charges SET status = ? WHERE id = ?').run('waiting_admin', state.chargeId);
+    const receiptFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+
+    const caption =
+      `💰 *فیش شارژ جدید*\n\n` +
+      `🆔 #${state.chargeId}\n` +
+      `👤 کاربر: @${escapeMarkdown(ctx.from.username || 'ندارد')} (${ctx.from.id})\n` +
+      `💵 مبلغ: ${formatNumber(charge.amount)} تومان`;
+
+    try {
+      await bot.telegram.sendPhoto(ADMIN_ID, receiptFileId, {
+        caption,
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [{ text: '✅ تایید شارژ', callback_data: `admin_confirm_${state.chargeId}`, style: 'success' }],
+          [{ text: '❌ رد شارژ', callback_data: `admin_reject_${state.chargeId}`, style: 'danger' }],
+        ]),
+      });
+      console.log('[CHARGE] Receipt sent to admin for charge:', state.chargeId);
+    } catch (err) {
+      console.error('[CHARGE] Failed to send to admin:', err.message);
+      return ctx.reply('❌ خطا در ارسال به ادمین. لطفاً دوباره تلاش کنید.');
+    }
+
+    ctx.reply('✅ فیش واریزی شما دریافت شد و به ادمین ارسال شد.\n⏳ منتظر تایید ادمین باشید...', mainMenu());
+    delete userState[ctx.from.id];
+    return;
   }
 });
 
@@ -2152,60 +2204,6 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-});
-
-bot.on('photo', async (ctx) => {
-  if (ctx.from.id === ADMIN_ID) {
-    const state = adminState[ctx.from.id];
-    if (state && state.action === 'add_trial_qr') {
-      const fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-      state.qrFileId = fileId;
-      state.action = 'add_trial_link';
-      ctx.reply('✅ QR کد دریافت شد.\n\nمرحله ۲: لینک اشتراک را ارسال کنید:');
-    }
-    return;
-  }
-
-  if (botOff) {
-    return ctx.reply('🔴 ربات در حال حاضر خاموش است.\nلطفاً بعداً تلاش کنید.');
-  }
-
-  const state = userState[ctx.from.id];
-  if (state && state.action === 'wait_charge_receipt') {
-    const charge = db.prepare('SELECT * FROM charges WHERE id = ? AND status = ?').get(state.chargeId, 'pending');
-    if (!charge) {
-      delete userState[ctx.from.id];
-      return ctx.reply('❌ این درخواست قبلاً پردازش شده است.');
-    }
-
-    db.prepare('UPDATE charges SET status = ? WHERE id = ?').run('waiting_admin', state.chargeId);
-    const receiptFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-
-    const caption =
-      `💰 *فیش شارژ جدید*\n\n` +
-      `🆔 #${state.chargeId}\n` +
-      `👤 کاربر: @${escapeMarkdown(ctx.from.username || 'ندارد')} (${ctx.from.id})\n` +
-      `💵 مبلغ: ${formatNumber(charge.amount)} تومان`;
-
-    try {
-      await bot.telegram.sendPhoto(ADMIN_ID, receiptFileId, {
-        caption,
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([
-          [{ text: '✅ تایید شارژ', callback_data: `admin_confirm_${state.chargeId}`, style: 'success' }],
-          [{ text: '❌ رد شارژ', callback_data: `admin_reject_${state.chargeId}`, style: 'danger' }],
-        ]),
-      });
-      console.log('[CHARGE] Receipt sent to admin for charge:', state.chargeId);
-    } catch (err) {
-      console.error('[CHARGE] Failed to send to admin:', err.message);
-      return ctx.reply('❌ خطا در ارسال به ادمین. لطفاً دوباره تلاش کنید.');
-    }
-
-    ctx.reply('✅ فیش واریزی شما دریافت شد و به ادمین ارسال شد.\n⏳ منتظر تایید ادمین باشید...', mainMenu());
-    delete userState[ctx.from.id];
-    return;
-  }
 });
 
 bot.action(/^admin_confirm_(\d+)$/, (ctx) => {
