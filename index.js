@@ -506,13 +506,12 @@ let buttonColors = {
 let referralReward = 30000;
 let minCharge = 10000;
 let maxCharge = 2000000;
-let processingTime = '۵ تا ۱۰ دقیقه';
 let welcomeImage = ''; // Feature 1: Welcome image URL
 let welcomeMessage = '🎉 به fastxlinebot خوش آمدید!\n\nخوشحالیم که ما را انتخاب کردید. 🌹\nما در تلاشیم تا تجربه‌ای امن، پرسرعت و پایدار از اینترنت آزاد را برای شما فراهم کنیم.\n\n🚀 ویژگی‌های سرویس ما:\n⚡️ سرعت و پایداری بالا\n🛡 امنیت و حریم خصوصی تضمین‌شده\n📞 پشتیبانی پاسخگو\n💰 تعرفه‌های منصفانه و اقتصادی\n\n👇 برای شروع، لطفاً از منوی زیر انتخاب کنید:';
 let channelMessage = '⚠️ *عضویت اجباری*\n\nبرای استفاده از ربات، ابتدا در کانال ما عضو شوید:\n\n📢 @{CHANNEL}\n\nپس از عضویت، دکمه زیر را بزنید:';
 
 function loadSettings() {
-  const saved = db.prepare("SELECT key, value FROM settings WHERE key IN ('buttonStyles', 'buttonColors', 'botOff', 'referralReward', 'minCharge', 'maxCharge', 'processingTime', 'welcomeMessage', 'welcomeImage', 'channelMessage', 'ADMIN_USERNAME', 'CARD_NUMBER', 'CARD_OWNER', 'CHANNEL_USERNAME', 'PANEL_URL', 'PANEL_USERNAME', 'PANEL_PASSWORD', 'group_ids')").all();
+  const saved = db.prepare("SELECT key, value FROM settings WHERE key IN ('buttonStyles', 'buttonColors', 'botOff', 'referralReward', 'minCharge', 'maxCharge', 'welcomeMessage', 'welcomeImage', 'channelMessage', 'ADMIN_USERNAME', 'CARD_NUMBER', 'CARD_OWNER', 'CHANNEL_USERNAME', 'PANEL_URL', 'PANEL_USERNAME', 'PANEL_PASSWORD', 'group_ids')").all();
   saved.forEach(row => {
     if (row.key === 'buttonStyles') {
       buttonStyles = row.value === 'true';
@@ -526,8 +525,6 @@ function loadSettings() {
       minCharge = Number(row.value) || 10000;
     } else if (row.key === 'maxCharge') {
       maxCharge = Number(row.value) || 2000000;
-    } else if (row.key === 'processingTime') {
-      processingTime = row.value || '۵ تا ۱۰ دقیقه';
     } else if (row.key === 'welcomeMessage') {
       welcomeMessage = row.value || welcomeMessage;
     } else if (row.key === 'welcomeImage') {
@@ -564,7 +561,6 @@ function saveSettings() {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('referralReward', String(referralReward));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('minCharge', String(minCharge));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('maxCharge', String(maxCharge));
-  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('processingTime', String(processingTime));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('welcomeMessage', String(welcomeMessage));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('welcomeImage', String(welcomeImage));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('channelMessage', String(channelMessage));
@@ -1933,19 +1929,6 @@ bot.on('text', async (ctx) => {
     saveSettings();
     delete adminState[userId];
     ctx.reply(`✅ حداکثر شارژ به ${formatNumber(val)} تومان تغییر کرد.`);
-    try {
-      await ctx.reply(adminBotSettingsText(), { parse_mode: 'Markdown', ...adminBotSettingsKeyboard() });
-    } catch (_) {
-      await ctx.reply(adminBotSettingsText().replace(/[*_`]/g, ''), { ...adminBotSettingsKeyboard() });
-    }
-    return;
-  }
-
-  if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'edit_setting_processing_time') {
-    processingTime = ctx.message.text.trim();
-    saveSettings();
-    delete adminState[userId];
-    ctx.reply(`✅ زمان پردازش به "${processingTime}" تغییر کرد.`);
     try {
       await ctx.reply(adminBotSettingsText(), { parse_mode: 'Markdown', ...adminBotSettingsKeyboard() });
     } catch (_) {
@@ -3705,8 +3688,7 @@ function adminBotSettingsText() {
     `   💳 شماره کارت: ${CARD_NUMBER || '---'}\n` +
     `   👤 نام صاحب کارت: ${CARD_OWNER || '---'}\n` +
     `   💰 حداقل شارژ: ${formatNumber(minCharge)} تومان\n` +
-    `   💰 حداکثر شارژ: ${formatNumber(maxCharge)} تومان\n` +
-    `   ⏳ زمان پردازش: ${processingTime}\n\n` +
+    `   💰 حداکثر شارژ: ${formatNumber(maxCharge)} تومان\n\n` +
     `🌐 *تنظیمات API پنل VPN*\n` +
     `   🔗 آدرس پنل: \`${PANEL_URL}\`\n` +
     `   👤 یوزرنیم: \`${PANEL_USERNAME}\`\n` +
@@ -3726,7 +3708,6 @@ function adminBotSettingsKeyboard() {
     [Markup.button.callback('📌 پاداش دعوت', 'admin_edit_referral')],
     [Markup.button.callback('💳 شماره کارت', 'admin_edit_card_number'), Markup.button.callback('👤 نام صاحب کارت', 'admin_edit_card_owner')],
     [Markup.button.callback('💰 حداقل شارژ', 'admin_edit_min_charge'), Markup.button.callback('💰 حداکثر شارژ', 'admin_edit_max_charge')],
-    [Markup.button.callback('⏳ زمان پردازش', 'admin_edit_processing_time')],
     [Markup.button.callback('👋 پیام خوش‌آمدگویی', 'admin_edit_welcome')],
     [Markup.button.callback('🖼 تصویر خوش‌آمدگویی', 'admin_edit_welcome_image')],
     [Markup.button.callback('📢 پیام عضویت', 'admin_edit_channel_msg')],
@@ -3797,15 +3778,6 @@ bot.action('admin_edit_max_charge', (ctx) => {
   adminState[ADMIN_ID] = { action: 'edit_setting_max_charge' };
   safeEdit(ctx, `💰 حداکثر شارژ فعلی: *${formatNumber(maxCharge)}* تومان\n\nمبلغ جدید را ارسال کنید:`, {
     parse_mode: 'Markdown',
-    ...Markup.inlineKeyboard([[b('لغو', 'admin_bot_settings', 'back')]]),
-  });
-});
-
-bot.action('admin_edit_processing_time', (ctx) => {
-  safeAnswer(ctx);
-  if (ctx.from.id !== ADMIN_ID) return;
-  adminState[ADMIN_ID] = { action: 'edit_setting_processing_time' };
-  safeEdit(ctx, `⏳ زمان پردازش فعلی: ${processingTime}\n\nزمان جدید را ارسال کنید:`, {
     ...Markup.inlineKeyboard([[b('لغو', 'admin_bot_settings', 'back')]]),
   });
 });
