@@ -638,7 +638,7 @@ function getWallet(userId) {
 }
 
 function formatNumber(n) {
-  return n.toLocaleString('fa-IR');
+  return n.toLocaleString('en-US');
 }
 
 function escapeMarkdown(s) {
