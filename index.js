@@ -1276,7 +1276,7 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
     ]));
   }
   const buttons = plans.map((p) => [
-    b(`${p.validity} روز | ${formatNumber(p.price)} ت | ${p.name}`, `plan_${p.gb}_${panelName}`, 'planSelect'),
+    b(`${p.validity} روز | ${formatNumber(p.price)} تومان | ${p.name}`, `plan_${p.gb}_${panelName}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
   safeEdit(ctx, `📦 *پلن‌های ${panel.display_name}*\n\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
@@ -3071,7 +3071,7 @@ function buildUserDetailText(userId) {
     text += '📦 *سفارشات اخیر*\n';
     recentOrders.forEach((o) => {
       const statusEmoji = o.status === 'delivered' ? '✅' : o.status === 'pending' ? '⏳' : '❌';
-      text += `   ${statusEmoji} ${escapeMarkdown(o.plan_name)} | ${o.validity} روز | ${formatNumber(o.price)} ت | ${o.created_at}\n`;
+      text += `   ${statusEmoji} ${escapeMarkdown(o.plan_name)} | ${o.validity} روز | ${formatNumber(o.price)} تومان | ${o.created_at}\n`;
     });
   }
 
