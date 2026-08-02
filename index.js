@@ -3902,12 +3902,16 @@ bot.action('admin_backup', async (ctx) => {
     return ctx.reply('❌ فایل دیتابیس پیدا نشد');
   }
 
+  const stats = fs.statSync(dbPath);
+  const fileSizeKB = (stats.size / 1024).toFixed(2);
+  const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+
   // Send database file directly
   await ctx.replyWithDocument({
     source: dbPath,
     filename: 'bot.db'
   }, {
-    caption: `✅ بکاپ دیتابیس\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: bot.db\n\nبرای ریستور: این فایل رو به /data/bot.db کپی کنید`
+    caption: `✅ بکاپ دیتابیس\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: bot.db\n📦 حجم: ${fileSizeKB} KB (${fileSizeMB} MB)\n\nبرای ریستور: این فایل رو به /data/bot.db کپی کنید`
   });
 });
 
