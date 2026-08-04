@@ -2807,45 +2807,48 @@ bot.action('admin_dashboard', (ctx) => {
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
-bot.action('admin_referral_list', (ctx) => {
-  safeAnswer(ctx);
+bot.action('admin_referral_list', async (ctx) => {
+  await safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
 
-  const referredUsers = db.prepare(`
-    SELECT u.user_id, u.username, u.first_name, u.created_at, u.referred_by,
-           ref.username as referrer_username, ref.user_id as referrer_id
-    FROM users u
-    LEFT JOIN users ref ON u.referred_by = ref.user_id
-    WHERE u.referred_by IS NOT NULL
-    ORDER BY u.created_at DESC
-    LIMIT 50
-  `).all();
+  try {
+    const referredUsers = db.prepare(`
+      SELECT u.user_id, u.username, u.first_name, u.created_at, u.referred_by,
+             ref.username as referrer_username, ref.user_id as referrer_id
+      FROM users u
+      LEFT JOIN users ref ON u.referred_by = ref.user_id
+      WHERE u.referred_by IS NOT NULL
+      ORDER BY u.created_at DESC
+      LIMIT 50
+    `).all();
 
-  const totalReferrals = db.prepare('SELECT COUNT(*) as c FROM users WHERE referred_by IS NOT NULL').get().c;
-  const totalReward = db.prepare('SELECT COALESCE(SUM(wallet), 0) as s FROM users WHERE user_id IN (SELECT referred_by FROM users WHERE referred_by IS NOT NULL)').get().s;
+    const totalReferrals = db.prepare('SELECT COUNT(*) as c FROM users WHERE referred_by IS NOT NULL').get().c;
 
-  let text = `👥 *لیست دعوت‌ها*\n━━━━━━━━━━━━━━━━━━\n\n`;
-  text += `📊 کل دعوت شده: ${totalReferrals}\n\n`;
+    let text = `👥 *لیست دعوت‌ها*\n━━━━━━━━━━━━━━━━━━\n\n`;
+    text += `📊 کل دعوت شده: ${totalReferrals}\n\n`;
 
-  if (referredUsers.length === 0) {
-    text += 'هیچ دعوتی ثبت نشده است.';
-  } else {
-    text += '━━━━━━━━━━━━━━━━━━\n\n';
-    referredUsers.forEach((u, i) => {
-      const displayName = u.username ? `@${u.username}` : (u.first_name || u.user_id);
-      const referrerName = u.referrer_username ? `@${u.referrer_username}` : u.referrer_id;
-      const date = new Date(u.created_at).toLocaleDateString('fa-IR');
-      text += `${i + 1}. ${displayName}\n`;
-      text += `   👤 دعوت شده توسط: ${referrerName}\n`;
-      text += `   📅 ${date}\n\n`;
-    });
+    if (referredUsers.length === 0) {
+      text += 'هیچ دعوتی ثبت نشده است.';
+    } else {
+      referredUsers.forEach((u, i) => {
+        const displayName = u.username ? `@${u.username}` : (u.first_name || u.user_id);
+        const referrerName = u.referrer_username ? `@${u.referrer_username}` : u.referrer_id;
+        const date = new Date(u.created_at).toLocaleDateString('fa-IR');
+        text += `${i + 1}. ${displayName}\n`;
+        text += `   👤 دعوت شده توسط: ${referrerName}\n`;
+        text += `   📅 ${date}\n\n`;
+      });
+    }
+
+    const buttons = [
+      [b('بازگشت ◀️', 'admin_dashboard', 'back')],
+    ];
+
+    await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  } catch (err) {
+    console.error('[REFERRAL_LIST] Error:', err.message);
+    await ctx.reply('❌ خطا در نمایش لیست دعوت‌ها').catch(() => {});
   }
-
-  const buttons = [
-    [b('بازگشت ◀️', 'admin_dashboard', 'back')],
-  ];
-
-  safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
 bot.action('admin_reset_orders_confirm', (ctx) => {
