@@ -2,6 +2,7 @@ require('dotenv').config();
 const { Telegraf, Markup } = require('telegraf');
 const Database = require('better-sqlite3');
 const https = require('https');
+// vittori-bot
 
 const bot = new Telegraf(process.env.BOT_TOKEN, {
   handlerTimeout: 60000,
