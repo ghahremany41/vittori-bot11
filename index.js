@@ -2812,13 +2812,12 @@ bot.action('admin_referral_list', async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
 
   try {
+    // Simple query without JOIN first
     const referredUsers = db.prepare(`
-      SELECT u.user_id, u.username, u.first_name, u.created_at, u.referred_by,
-             ref.username as referrer_username, ref.user_id as referrer_id
-      FROM users u
-      LEFT JOIN users ref ON u.referred_by = ref.user_id
-      WHERE u.referred_by IS NOT NULL
-      ORDER BY u.created_at DESC
+      SELECT user_id, username, first_name, created_at, referred_by
+      FROM users
+      WHERE referred_by IS NOT NULL
+      ORDER BY created_at DESC
       LIMIT 50
     `).all();
 
@@ -2831,12 +2830,9 @@ bot.action('admin_referral_list', async (ctx) => {
       text += 'هیچ دعوتی ثبت نشده است.';
     } else {
       referredUsers.forEach((u, i) => {
-        const displayName = u.username ? `@${u.username}` : (u.first_name || u.user_id);
-        const referrerName = u.referrer_username ? `@${u.referrer_username}` : u.referrer_id;
-        const date = new Date(u.created_at).toLocaleDateString('fa-IR');
-        text += `${i + 1}. ${displayName}\n`;
-        text += `   👤 دعوت شده توسط: ${referrerName}\n`;
-        text += `   📅 ${date}\n\n`;
+        const displayName = u.username ? `@${u.username}` : (u.first_name || String(u.user_id));
+        text += `${i + 1}. ${displayName} (ID: ${u.user_id})\n`;
+        text += `   📅 ${new Date(u.created_at).toLocaleDateString('fa-IR')}\n\n`;
       });
     }
 
@@ -2847,7 +2843,7 @@ bot.action('admin_referral_list', async (ctx) => {
     await ctx.editMessageText(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
   } catch (err) {
     console.error('[REFERRAL_LIST] Error:', err.message);
-    await ctx.reply('❌ خطا در نمایش لیست دعوت‌ها').catch(() => {});
+    await ctx.reply('❌ خطا در نمایش لیست دعوت‌ها: ' + err.message).catch(() => {});
   }
 });
 
