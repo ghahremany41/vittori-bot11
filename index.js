@@ -2784,6 +2784,7 @@ bot.action('admin_dashboard', (ctx) => {
   text += '\n━━━━━━━━━━━━━━━━━━';
 
   const buttons = [
+    [Markup.button.callback('👥 لیست دعوت‌ها', 'admin_referral_list')],
     [Markup.button.callback('🗑️ پاک کردن سفارشات', 'admin_reset_orders_confirm')],
     [Markup.button.callback('🗑️ پاک کردن شارژها', 'admin_reset_charges_confirm')],
     [Markup.button.callback('💰 صفر کردن کیف پول‌ها', 'admin_reset_wallets_confirm')],
@@ -2792,6 +2793,47 @@ bot.action('admin_dashboard', (ctx) => {
     [b('🏷️ مدیریت کد تخفیف', 'admin_discount_codes', 'discount')],
     [b('بازگشت ◀️', 'back_to_menu', 'back')],
   ];
+  safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+bot.action('admin_referral_list', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+
+  const referredUsers = db.prepare(`
+    SELECT u.user_id, u.username, u.first_name, u.created_at, u.referred_by,
+           ref.username as referrer_username, ref.user_id as referrer_id
+    FROM users u
+    LEFT JOIN users ref ON u.referred_by = ref.user_id
+    WHERE u.referred_by IS NOT NULL
+    ORDER BY u.created_at DESC
+    LIMIT 50
+  `).all();
+
+  const totalReferrals = db.prepare('SELECT COUNT(*) as c FROM users WHERE referred_by IS NOT NULL').get().c;
+  const totalReward = db.prepare('SELECT COALESCE(SUM(wallet), 0) as s FROM users WHERE user_id IN (SELECT referred_by FROM users WHERE referred_by IS NOT NULL)').get().s;
+
+  let text = `👥 *لیست دعوت‌ها*\n━━━━━━━━━━━━━━━━━━\n\n`;
+  text += `📊 کل دعوت شده: ${totalReferrals}\n\n`;
+
+  if (referredUsers.length === 0) {
+    text += 'هیچ دعوتی ثبت نشده است.';
+  } else {
+    text += '━━━━━━━━━━━━━━━━━━\n\n';
+    referredUsers.forEach((u, i) => {
+      const displayName = u.username ? `@${u.username}` : (u.first_name || u.user_id);
+      const referrerName = u.referrer_username ? `@${u.referrer_username}` : u.referrer_id;
+      const date = new Date(u.created_at).toLocaleDateString('fa-IR');
+      text += `${i + 1}. ${displayName}\n`;
+      text += `   👤 دعوت شده توسط: ${referrerName}\n`;
+      text += `   📅 ${date}\n\n`;
+    });
+  }
+
+  const buttons = [
+    [b('بازگشت ◀️', 'admin_dashboard', 'back')],
+  ];
+
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
