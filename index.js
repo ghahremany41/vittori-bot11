@@ -811,30 +811,35 @@ bot.start(async (ctx) => {
   if (isBanned(ctx.from.id)) return ctx.reply('❌ حساب شما مسدود شده است.');
 
   const payload = ctx.startPayload;
+  console.log('[START] User:', ctx.from.id, 'Existing:', !!existingUser, 'Payload:', payload);
+
   if (payload && payload.startsWith('ref_')) {
     const referrerId = Number(payload.replace('ref_', ''));
-    const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(ctx.from.id);
-    // Give reward if: new user OR existing user without referred_by
-    if (referrerId && referrerId !== ctx.from.id && (!existingUser || (user && !user.referred_by))) {
+    console.log('[REFERRAL] ReferrerId:', referrerId, 'ExistingUser:', !!existingUser);
+
+    if (referrerId && referrerId !== ctx.from.id && !existingUser) {
       const referrer = db.prepare('SELECT * FROM users WHERE user_id = ?').get(referrerId);
+      console.log('[REFERRAL] Referrer found:', !!referrer, 'Banned:', referrer?.banned);
+
       if (referrer && !referrer.banned && referrerId !== ADMIN_ID) {
-        // Use transaction
         const insertReferral = db.transaction((referrerId, userId) => {
           db.prepare('UPDATE users SET referred_by = ? WHERE user_id = ?').run(referrerId, userId);
           db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ?').run(referralReward, referrerId);
         });
         try {
           insertReferral(referrerId, ctx.from.id);
-          console.log('[REFERRAL] Reward given to:', referrerId, 'for user:', ctx.from.id);
+          console.log('[REFERRAL] ✅ Reward given to:', referrerId, 'amount:', referralReward);
           bot.telegram.sendMessage(referrerId, `🎉 کاربر جدید با لینک دعوت شما وارد ربات شد!\n\n💰 *${formatNumber(referralReward)} تومان* به کیف پول شما اضافه شد!`, { parse_mode: 'Markdown' }).catch(() => {});
         } catch (err) {
-          console.error('[REFERRAL] Error:', err.message);
+          console.error('[REFERRAL] ❌ Error:', err.message);
         }
       } else {
-        console.log('[REFERRAL] Skip: referrer not found or banned or is admin');
+        console.log('[REFERRAL] ❌ Skip: referrer not found/banned/admin');
       }
+    } else if (existingUser) {
+      console.log('[REFERRAL] ❌ Skip: user already exists (ID:', ctx.from.id, ')');
     } else {
-      console.log('[REFERRAL] Skip: user already has referral or same user');
+      console.log('[REFERRAL] ❌ Skip: same user or invalid referrer');
     }
   }
 
