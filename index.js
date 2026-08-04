@@ -898,11 +898,22 @@ bot.command('renew', (ctx) => {
   const latest = orders[0];
   const plan = getPlanByGb(latest.plan_gb, latest.panel || 'pasarguard');
   if (!plan) return ctx.reply('❌ پلن یافت نشد.', mainMenu());
+
+  const wallet = getWallet(ctx.from.id);
+  const canPay = wallet >= plan.price;
+
   ctx.reply(
-    `♻️ *تمدید سرویس*\n\n🔹 سرویس قبلی: ${escapeMarkdown(plan.name)}\n🔹 مدت: ${plan.validity} روز\n🔹 قیمت: ${formatNumber(plan.price)} تومان`,
+    `♻️ *تمدید سرویس*\n\n` +
+    `🔹 سرویس قبلی: ${escapeMarkdown(plan.name)}\n` +
+    `🔹 مدت: ${plan.validity} روز\n` +
+    `🔹 قیمت: ${formatNumber(plan.price)} تومان\n` +
+    `💰 موجودی کیف پول: ${formatNumber(wallet)} تومان\n\n` +
+    (canPay ? `✅ موجودی کافی است` : `❌ موجودی کافی نیست`),
     { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
-      [b(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `pay_${plan.gb}_${latest.panel || 'pasarguard'}`, 'primary')],
-      [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
+      canPay
+        ? [b(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `pay_${plan.gb}_${latest.panel || 'pasarguard'}`, 'primary')]
+        : [b('💰 افزایش موجودی', 'add_balance', 'addBalance')],
+      [b('بازگشت ◀️', 'back_to_menu', 'back')],
     ])}
   );
 });
@@ -2688,16 +2699,26 @@ bot.action('renew_service', (ctx) => {
     return safeEdit(ctx,'❌ پلن یافت نشد.', mainMenu());
   }
 
+  const wallet = getWallet(ctx.from.id);
+  const canPay = wallet >= plan.price;
+
   const text =
     `♻️ *تمدید سرویس*\n\n` +
     `🔹 سرویس قبلی: ${escapeMarkdown(plan.name)}\n` +
     `🔹 مدت: ${plan.validity} روز\n` +
-    `🔹 قیمت: ${formatNumber(plan.price)} تومان`;
+    `🔹 قیمت: ${formatNumber(plan.price)} تومان\n` +
+    `💰 موجودی کیف پول: ${formatNumber(wallet)} تومان\n\n` +
+    (canPay
+      ? `✅ موجودی کافی است`
+      : `❌ موجودی کافی نیست\nلطفاً ابتدا کیف پول خود را شارژ کنید`);
 
-  const buttons = [
-    [Markup.button.callback(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `pay_${plan.gb}_${latest.panel || 'pasarguard'}`)],
-    [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
-  ];
+  const buttons = [];
+  if (canPay) {
+    buttons.push([Markup.button.callback(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `pay_${plan.gb}_${latest.panel || 'pasarguard'}`)]);
+  } else {
+    buttons.push([b('💰 افزایش موجودی', 'add_balance', 'addBalance')]);
+  }
+  buttons.push([b('بازگشت ◀️', 'back_to_menu', 'back')]);
 
   safeEdit(ctx,text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
