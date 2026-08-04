@@ -811,12 +811,14 @@ bot.start(async (ctx) => {
   if (isBanned(ctx.from.id)) return ctx.reply('❌ حساب شما مسدود شده است.');
 
   const payload = ctx.startPayload;
-  if (payload && payload.startsWith('ref_') && !existingUser) {
+  if (payload && payload.startsWith('ref_')) {
     const referrerId = Number(payload.replace('ref_', ''));
-    if (referrerId && referrerId !== ctx.from.id) {
+    const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(ctx.from.id);
+    // Give reward if: new user OR existing user without referred_by
+    if (referrerId && referrerId !== ctx.from.id && (!existingUser || (user && !user.referred_by))) {
       const referrer = db.prepare('SELECT * FROM users WHERE user_id = ?').get(referrerId);
-      if (referrer && !referrer.banned) {
-        // Use transaction to ensure both updates succeed or fail together
+      if (referrer && !referrer.banned && referrerId !== ADMIN_ID) {
+        // Use transaction
         const insertReferral = db.transaction((referrerId, userId) => {
           db.prepare('UPDATE users SET referred_by = ? WHERE user_id = ?').run(referrerId, userId);
           db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ?').run(referralReward, referrerId);
@@ -828,7 +830,11 @@ bot.start(async (ctx) => {
         } catch (err) {
           console.error('[REFERRAL] Error:', err.message);
         }
+      } else {
+        console.log('[REFERRAL] Skip: referrer not found or banned or is admin');
       }
+    } else {
+      console.log('[REFERRAL] Skip: user already has referral or same user');
     }
   }
 
