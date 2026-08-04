@@ -815,10 +815,19 @@ bot.start(async (ctx) => {
     const referrerId = Number(payload.replace('ref_', ''));
     if (referrerId && referrerId !== ctx.from.id) {
       const referrer = db.prepare('SELECT * FROM users WHERE user_id = ?').get(referrerId);
-      if (referrer) {
-        db.prepare('UPDATE users SET referred_by = ? WHERE user_id = ?').run(referrerId, ctx.from.id);
-        db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ?').run(referralReward, referrerId);
-        bot.telegram.sendMessage(referrerId, `🎉 کاربر جدید با لینک دعوت شما وارد ربات شد!\n\n💰 *${formatNumber(referralReward)} تومان* به کیف پول شما اضافه شد!`, { parse_mode: 'Markdown' });
+      if (referrer && !referrer.banned) {
+        // Use transaction to ensure both updates succeed or fail together
+        const insertReferral = db.transaction((referrerId, userId) => {
+          db.prepare('UPDATE users SET referred_by = ? WHERE user_id = ?').run(referrerId, userId);
+          db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ?').run(referralReward, referrerId);
+        });
+        try {
+          insertReferral(referrerId, ctx.from.id);
+          console.log('[REFERRAL] Reward given to:', referrerId, 'for user:', ctx.from.id);
+          bot.telegram.sendMessage(referrerId, `🎉 کاربر جدید با لینک دعوت شما وارد ربات شد!\n\n💰 *${formatNumber(referralReward)} تومان* به کیف پول شما اضافه شد!`, { parse_mode: 'Markdown' }).catch(() => {});
+        } catch (err) {
+          console.error('[REFERRAL] Error:', err.message);
+        }
       }
     }
   }
