@@ -178,7 +178,7 @@ async function autoDeliverOrder(orderId, ctx) {
   const panel = order.panel || 'pasarguard';
   const dataLimitBytes = order.plan_gb * 1024 * 1024 * 1024;
   const expireUnix = Math.floor(Date.now() / 1000) + order.validity * 86400;
-  const panelUsername = `fastxline_${order.user_id}_${orderId}`;
+  const panelUsername = `fastxline_${Math.floor(1000 + Math.random() * 9000)}`;
 
   try {
     // Create user on panel
@@ -1217,7 +1217,7 @@ bot.action('free_test', async (ctx) => {
     await ctx.editMessageText('🔄 در حال ایجاد سرویس تست... لطفاً صبر کنید.');
 
     // Create user on panel (100MB for 24h)
-    const panelUsername = 'fastxline_trial_' + ctx.from.id + '_' + Date.now();
+    const panelUsername = 'fastxline_trial_' + Math.floor(1000 + Math.random() * 9000);
     const expireUnix = Math.floor(Date.now() / 1000) + 86400; // +24h
     const dataLimitBytes = 100 * 1024 * 1024; // 100 MB
 
