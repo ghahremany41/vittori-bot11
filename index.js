@@ -2620,7 +2620,7 @@ bot.action(/^service_detail_order_(\d+)$/, async (ctx) => {
   const buttons = [];
 
   if (plan) {
-    buttons.push([Markup.button.callback(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `pay_${plan.gb}_${plan.panel || 'pasarguard'}`)]);
+    buttons.push([Markup.button.callback(`💳 تمدید سرویس`, 'renew_service')]);
   }
 
   buttons.push([Markup.button.callback('🗑 حذف سرویس', `delete_service_${order.id}`)]);
