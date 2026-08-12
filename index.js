@@ -818,7 +818,10 @@ bot.start(async (ctx) => {
     const referrerId = Number(payload.replace('ref_', ''));
     console.log('[REFERRAL] ReferrerId:', referrerId, 'ExistingUser:', !!existingUser);
 
-    if (referrerId && referrerId !== ctx.from.id && !existingUser) {
+    // Only give reward if user has no referral yet
+    const currentUser = db.prepare('SELECT referred_by FROM users WHERE user_id = ?').get(ctx.from.id);
+
+    if (referrerId && referrerId !== ctx.from.id && (!currentUser || !currentUser.referred_by)) {
       const referrer = db.prepare('SELECT * FROM users WHERE user_id = ?').get(referrerId);
       console.log('[REFERRAL] Referrer found:', !!referrer, 'Banned:', referrer?.banned);
 
@@ -837,8 +840,8 @@ bot.start(async (ctx) => {
       } else {
         console.log('[REFERRAL] ❌ Skip: referrer not found/banned/admin');
       }
-    } else if (existingUser) {
-      console.log('[REFERRAL] ❌ Skip: user already exists (ID:', ctx.from.id, ')');
+    } else if (currentUser && currentUser.referred_by) {
+      console.log('[REFERRAL] ❌ Skip: user already has referral (ID:', ctx.from.id, ')');
     } else {
       console.log('[REFERRAL] ❌ Skip: same user or invalid referrer');
     }
