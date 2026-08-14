@@ -3976,19 +3976,34 @@ bot.action('admin_backup', async (ctx) => {
   const dbPath = process.env.DB_PATH || '/data/bot.db';
 
   if (!fs.existsSync(dbPath)) {
-    return ctx.reply('❌ فایل دیتابیس پیدا نشد');
+    return ctx.reply('❌ فایل دیتابیس پیدا نشد: ' + dbPath);
   }
 
   const stats = fs.statSync(dbPath);
   const fileSizeKB = (stats.size / 1024).toFixed(2);
   const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
+  // List all .db files in /data for debugging
+  let dbFilesInfo = '';
+  try {
+    const dataDir = path.dirname(dbPath);
+    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.db') || f.endsWith('.db-shm') || f.endsWith('.db-wal'));
+    dbFilesInfo = '\n📂 فایل‌های دیتابیس در ' + dataDir + ':\n' + files.map(f => {
+      const fpath = path.join(dataDir, f);
+      const fstat = fs.statSync(fpath);
+      return `   ▫️ ${f} (${(fstat.size/1024).toFixed(1)} KB)`;
+    }).join('\n');
+  } catch (e) {
+    dbFilesInfo = '\n📂 خطا در لیست فایل‌ها: ' + e.message;
+  }
+
   // Calculate MD5 checksum for file verification
   const fileBuffer = fs.readFileSync(dbPath);
   const md5Hash = crypto.createHash('md5').update(fileBuffer).digest('hex').substring(0, 8);
 
-  // Count records in each table for verification
+  // Count records in each table for verification + sample users
   let counts = {};
+  let sampleUsers = '';
   try {
     counts = {
       users: db.prepare('SELECT COUNT(*) as c FROM users').get().c,
@@ -4000,6 +4015,11 @@ bot.action('admin_backup', async (ctx) => {
       discount_codes: db.prepare('SELECT COUNT(*) as c FROM discount_codes').get().c,
       settings: db.prepare('SELECT COUNT(*) as c FROM settings').get().c,
     };
+    // Get sample of users
+    const users = db.prepare('SELECT user_id, username, wallet, referred_by, created_at FROM users ORDER BY created_at DESC LIMIT 5').all();
+    if (users.length > 0) {
+      sampleUsers = '\n👥 نمونه کاربران (آخرین ۵):\n' + users.map(u => `   ▫️ ${u.user_id} | @${u.username || '---'} | ${u.wallet} تومان | ref: ${u.referred_by || '---'} | ${u.created_at}`).join('\n');
+    }
   } catch (e) {
     counts = { error: e.message };
   }
@@ -4013,8 +4033,9 @@ bot.action('admin_backup', async (ctx) => {
     source: dbPath,
     filename: filename
   }, {
-    caption: `✅ بکاپ دیتابیس (Railway Volume /data)\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: ${filename}\n📦 حجم: ${fileSizeKB} KB (${fileSizeMB} MB)\n🔐 MD5: ${md5Hash}\n\n📊 تعداد رکوردها:\n` +
+    caption: `✅ بکاپ دیتابیس (Railway Volume /data)\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: ${filename}\n📦 حجم: ${fileSizeKB} KB (${fileSizeMB} MB)\n🔐 MD5: ${md5Hash}\n📍 مسیر دیتابیس: ${dbPath}${dbFilesInfo}\n\n📊 تعداد رکوردها:\n` +
     Object.entries(counts).map(([k, v]) => `   ▫️ ${k}: ${v}`).join('\n') +
+    sampleUsers +
     `\n\n💡 برای ریستور: این فایل رو به /data/bot.db کپی کنید`
   });
 });
