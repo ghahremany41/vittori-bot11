@@ -3982,12 +3982,31 @@ bot.action('admin_backup', async (ctx) => {
   const fileSizeKB = (stats.size / 1024).toFixed(2);
   const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
 
+  // Count records in each table for verification
+  let counts = {};
+  try {
+    counts = {
+      users: db.prepare('SELECT COUNT(*) as c FROM users').get().c,
+      orders: db.prepare('SELECT COUNT(*) as c FROM orders').get().c,
+      charges: db.prepare('SELECT COUNT(*) as c FROM charges').get().c,
+      plans: db.prepare('SELECT COUNT(*) as c FROM plans').get().c,
+      panels: db.prepare('SELECT COUNT(*) as c FROM panels').get().c,
+      free_trials: db.prepare('SELECT COUNT(*) as c FROM free_trials').get().c,
+      discount_codes: db.prepare('SELECT COUNT(*) as c FROM discount_codes').get().c,
+      settings: db.prepare('SELECT COUNT(*) as c FROM settings').get().c,
+    };
+  } catch (e) {
+    counts = { error: e.message };
+  }
+
   // Send database file directly
   await ctx.replyWithDocument({
     source: dbPath,
     filename: 'bot.db'
   }, {
-    caption: `✅ بکاپ دیتابیس\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: bot.db\n📦 حجم: ${fileSizeKB} KB (${fileSizeMB} MB)\n\nبرای ریستور: این فایل رو به /data/bot.db کپی کنید`
+    caption: `✅ بکاپ دیتابیس (Railway Volume /data)\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: bot.db\n📦 حجم: ${fileSizeKB} KB (${fileSizeMB} MB)\n\n📊 تعداد رکوردها:\n` +
+    Object.entries(counts).map(([k, v]) => `   ▫️ ${k}: ${v}`).join('\n') +
+    `\n\n💡 برای ریستور: این فایل رو به /data/bot.db کپی کنید`
   });
 });
 
