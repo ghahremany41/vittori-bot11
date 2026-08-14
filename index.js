@@ -3971,6 +3971,7 @@ bot.action('admin_backup', async (ctx) => {
 
   const fs = require('fs');
   const path = require('path');
+  const crypto = require('crypto');
 
   const dbPath = process.env.DB_PATH || '/data/bot.db';
 
@@ -3981,6 +3982,10 @@ bot.action('admin_backup', async (ctx) => {
   const stats = fs.statSync(dbPath);
   const fileSizeKB = (stats.size / 1024).toFixed(2);
   const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+
+  // Calculate MD5 checksum for file verification
+  const fileBuffer = fs.readFileSync(dbPath);
+  const md5Hash = crypto.createHash('md5').update(fileBuffer).digest('hex').substring(0, 8);
 
   // Count records in each table for verification
   let counts = {};
@@ -3999,12 +4004,16 @@ bot.action('admin_backup', async (ctx) => {
     counts = { error: e.message };
   }
 
+  // Filename with timestamp and hash
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+  const filename = `bot-backup-${timestamp}-${md5Hash}.db`;
+
   // Send database file directly
   await ctx.replyWithDocument({
     source: dbPath,
-    filename: 'bot.db'
+    filename: filename
   }, {
-    caption: `✅ بکاپ دیتابیس (Railway Volume /data)\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: bot.db\n📦 حجم: ${fileSizeKB} KB (${fileSizeMB} MB)\n\n📊 تعداد رکوردها:\n` +
+    caption: `✅ بکاپ دیتابیس (Railway Volume /data)\n\n📅 ${new Date().toLocaleString('fa-IR')}\n📁 فایل: ${filename}\n📦 حجم: ${fileSizeKB} KB (${fileSizeMB} MB)\n🔐 MD5: ${md5Hash}\n\n📊 تعداد رکوردها:\n` +
     Object.entries(counts).map(([k, v]) => `   ▫️ ${k}: ${v}`).join('\n') +
     `\n\n💡 برای ریستور: این فایل رو به /data/bot.db کپی کنید`
   });
