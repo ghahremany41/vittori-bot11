@@ -3979,6 +3979,14 @@ bot.action('admin_backup', async (ctx) => {
     return ctx.reply('❌ فایل دیتابیس پیدا نشد: ' + dbPath);
   }
 
+  // Force WAL checkpoint to ensure all data is in the main .db file
+  try {
+    db.pragma('wal_checkpoint = TRUNCATE');
+    console.log('[BACKUP] WAL checkpoint completed');
+  } catch (e) {
+    console.warn('[BACKUP] WAL checkpoint warning:', e.message);
+  }
+
   const stats = fs.statSync(dbPath);
   const fileSizeKB = (stats.size / 1024).toFixed(2);
   const fileSizeMB = (stats.size / (1024 * 1024)).toFixed(2);
