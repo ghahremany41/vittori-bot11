@@ -583,6 +583,18 @@ loadSettings();
 // Discover group IDs on startup
 discoverGroupIds().catch(() => {});
 
+// Cleanup orphan plans: plans whose panel no longer exists
+try {
+  const activePanels = db.prepare('SELECT name FROM panels').all().map(p => p.name);
+  const orphanPlans = db.prepare(`SELECT * FROM plans WHERE panel NOT IN (${activePanels.map(() => '?').join(',')})`).all(...activePanels);
+  if (orphanPlans.length > 0) {
+    const deleteRes = db.prepare(`DELETE FROM plans WHERE panel NOT IN (${activePanels.map(() => '?').join(',')})`).run(...activePanels);
+    console.log(`[CLEANUP] Removed ${deleteRes.changes} orphan plans (panel deleted but plans remained)`);
+  }
+} catch (e) {
+  console.warn('[CLEANUP] Orphan plan cleanup warning:', e.message);
+}
+
 function ensureUser(ctx) {
   const userId = ctx.from.id;
   const username = ctx.from.username || '';
@@ -3398,15 +3410,15 @@ bot.action(/^admin_delete_panel_(\d+)$/, async (ctx) => {
   const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(panelId);
   if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
 
-  const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panelId).c;
+  const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
   if (planCount > 0) {
-    return safeEdit(ctx, `❌ این پنل دارای ${planCount} پلن است. ابتدا پلن‌ها را حذف یا غیرفعال کنید.`, Markup.inlineKeyboard([
-      [b('بازگشت ◀️', 'admin_panels', 'back')],
-    ]));
+    // Auto-delete orphan plans instead of blocking
+    db.prepare('DELETE FROM plans WHERE panel = ?').run(panel.name);
+    console.log(`[PANEL DELETE] Auto-deleted ${planCount} plans for panel ${panel.name}`);
   }
 
   db.prepare('DELETE FROM panels WHERE id = ?').run(panelId);
-  ctx.reply(`🗑️ پنل ${panel.display_name} حذف شد.`);
+  ctx.reply(`🗑️ پنل ${panel.display_name} و ${planCount} پلن مربوطه حذف شدند.`);
   // Re-show list
   const panels = getAllPanels();
   let text = '🖥 مدیریت پنل‌ها\n\n';
