@@ -1229,12 +1229,14 @@ bot.action('cancel_charge', (ctx) => {
 bot.action('buy_sub', (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
+  const panels = getActivePanels();
   const text =
     `📦 *خرید سرویس*\n\n` +
-    `پنل مورد نظر خود را انتخاب کنید:`;
+    `پنل مورد نظر خود را انتخاب کنید:\n\n` +
+    panels.map(p => `🔹 *${escapeMarkdown(p.display_name)}*${p.description ? `\n   _${escapeMarkdown(p.description)}_` : ''}`).join('\n\n');
 
   const buttons = [
-    ...getActivePanels().map(p => [b(`🔹 ${p.display_name}`, `select_${p.name}`, 'panelSelect')]),
+    ...panels.map(p => [b(`🔹 ${p.display_name}`, `select_${p.name}`, 'panelSelect')]),
     [b('بازگشت ◀️', 'back_to_menu', 'back')],
   ];
 
@@ -1344,7 +1346,8 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
     b(`${p.validity} روز | ${formatNumber(p.price)} تومان | ${p.name}`, `plan_${p.gb}_${panelName}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
-  safeEdit(ctx, `📦 *پلن‌های ${panel.display_name}*\n\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  const panelDesc = panel.description ? `\n\n${escapeMarkdown(panel.description)}\n` : '';
+  safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
 bot.action(/^plan_(\d+)_(pasarguard|economic|[\w]+)(_2m)?$/, (ctx) => {
