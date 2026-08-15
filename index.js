@@ -413,6 +413,10 @@ try {
 } catch (_) {}
 
 try {
+  db.exec(`ALTER TABLE users ADD COLUMN ban_reason TEXT`);
+} catch (_) {}
+
+try {
   db.exec(`ALTER TABLE users ADD COLUMN used_free_test INTEGER DEFAULT 0`);
 } catch (_) {}
 
@@ -1122,6 +1126,13 @@ bot.action('admin_color_settings', (ctx) => {
 });
 
 bot.action('noop', (ctx) => { safeAnswer(ctx); });
+
+bot.action('admin_cancel_ban', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  delete adminState[ADMIN_ID];
+  ctx.reply('❌ عملیات مسدودیت لغو شد.');
+});
 
 bot.action(/^admin_set_color_(\w+)$/, (ctx) => {
   safeAnswer(ctx);
@@ -1930,6 +1941,27 @@ bot.on('text', async (ctx) => {
 
       return showUserDetailMsg(ctx, user.user_id);
     }
+  }
+
+  // === Ban user with reason ===
+  if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'ban_user_with_reason') {
+    const targetId = adminState[userId].targetId;
+    const reason = ctx.message.text.trim();
+    const skip = (reason === 'رد کردن' || reason === 'حذف' || reason === 'بدون دلیل');
+    const finalReason = skip ? null : reason;
+
+    db.prepare('UPDATE users SET banned = 1, ban_reason = ? WHERE user_id = ?').run(finalReason, targetId);
+    delete adminState[userId];
+
+    const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(targetId);
+    ctx.reply(`✅ کاربر @${escapeMarkdown(user.username || targetId)} مسدود شد.${finalReason ? `\n📝 دلیل: ${finalReason}` : ''}`);
+
+    let userMsg = '❌ حساب شما توسط مدیر مسدود شد.';
+    if (finalReason) userMsg += `\n📝 دلیل: ${finalReason}`;
+    bot.telegram.sendMessage(targetId, userMsg).catch(() => {});
+
+    // Re-show user detail
+    return showUserDetailMsg(ctx, targetId);
   }
 
   // === Admin settings text input handlers ===
@@ -3178,6 +3210,9 @@ function buildUserDetailText(userId) {
   text += `🔹 نام کاربری: @${escapeMarkdown(user.username || 'ندارد')}\n`;
   text += `🔹 نام: ${escapeMarkdown(user.first_name || 'ندارد')}\n`;
   text += `🔹 وضعیت: ${status}\n`;
+  if (user.banned && user.ban_reason) {
+    text += `🔹 دلیل مسدودیت: ${escapeMarkdown(user.ban_reason)}\n`;
+  }
   text += `🔹 موجودی کیف پول: ${formatNumber(user.wallet)} تومان\n`;
   text += `🔹 تاریخ عضویت: ${user.created_at}\n\n`;
   text += '📋 *آمار*\n';
@@ -3231,17 +3266,24 @@ bot.action(/^admin_toggle_ban_(\d+)$/, (ctx) => {
   const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(targetId);
   if (!user) return ctx.reply('❌ کاربر یافت نشد.');
 
-  const newStatus = user.banned ? 0 : 1;
-  db.prepare('UPDATE users SET banned = ? WHERE user_id = ?').run(newStatus, targetId);
-
-  const statusText = newStatus ? 'مسدود' : 'فعال';
-  ctx.reply(`✅ کاربر @${escapeMarkdown(user.username || targetId)} ${statusText} شد.`);
-  if (newStatus) {
-    bot.telegram.sendMessage(targetId, '❌ حساب شما توسط مدیر مسدود شد.');
-  } else {
-    bot.telegram.sendMessage(targetId, '✅ حساب شما توسط مدیر فعال شد.');
+  // If user is already banned, unban without asking for reason
+  if (user.banned) {
+    db.prepare('UPDATE users SET banned = 0, ban_reason = NULL WHERE user_id = ?').run(targetId);
+    ctx.reply(`✅ کاربر @${escapeMarkdown(user.username || targetId)} فعال شد.`);
+    bot.telegram.sendMessage(targetId, '✅ حساب شما توسط مدیر فعال شد.').catch(() => {});
+    return;
   }
+
+  // Ask for ban reason
+  adminState[ADMIN_ID] = { action: 'ban_user_with_reason', targetId };
+  ctx.reply(
+    `🚫 *مسدود کردن کاربر*\n\nکاربر: @${escapeMarkdown(user.username || targetId)} (${targetId})\n\nدلیل مسدودیت را وارد کنید:\n(یا "رد کردن" برای مسدودیت بدون دلیل)`,
+    { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('لغو', 'admin_cancel_ban', 'back')]]) }
+  );
 });
+
+// Text handler for ban reason (inside adminState block)
+// This is checked in the main bot.on('text') handler via adminState[userId].action === 'ban_user_with_reason'
 
 bot.action(/^admin_charge_user_(\d+)$/, (ctx) => {
   safeAnswer(ctx);
