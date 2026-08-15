@@ -465,6 +465,8 @@ function showPlanList(ctx, panel) {
 
 const adminState = {};
 const userState = {};
+// Maps admin's forwarded support message_id -> userId (for admin replies)
+const adminForwardMap = new Map();
 let botOff = false;
 let buttonStyles = true;
 let buttonColors = {
@@ -1134,6 +1136,23 @@ bot.action('admin_cancel_ban', (ctx) => {
   ctx.reply('❌ عملیات مسدودیت لغو شد.');
 });
 
+bot.action(/^admin_reply_support_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const targetId = Number(ctx.match[1]);
+  adminState[ADMIN_ID] = { action: 'reply_support', targetId };
+  ctx.reply(`✉️ در حال پاسخ به کاربر ${targetId}\n\nپیام خود را ارسال کنید:`, Markup.inlineKeyboard([
+    [b('لغو', 'admin_cancel_reply', 'back')],
+  ]));
+});
+
+bot.action('admin_cancel_reply', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  delete adminState[ADMIN_ID];
+  ctx.reply('❌ پاسخ لغو شد.');
+});
+
 bot.action(/^admin_set_color_(\w+)$/, (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
@@ -1593,6 +1612,26 @@ bot.on('photo', async (ctx) => {
     delete userState[ctx.from.id];
     return;
   }
+
+  // Support mode: forward user photo to admin
+  if (userState[ctx.from.id] && userState[ctx.from.id].action === 'support_mode') {
+    const photoFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+    try {
+      const forwarded = await bot.telegram.forwardMessage(ADMIN_ID, ctx.chat.id, ctx.message.message_id);
+      await bot.telegram.sendMessage(ADMIN_ID, `📨 تصویر پشتیبانی از @${ctx.from.username || 'ندارد'} (${ctx.from.id}):`, {
+        reply_markup: {
+          inline_keyboard: [[{ text: '✉️ پاسخ', callback_data: `admin_reply_support_${ctx.from.id}` }]],
+        },
+      });
+      adminForwardMap.set(forwarded.message_id, ctx.from.id);
+      ctx.reply('✅ تصویر شما برای پشتیبانی ارسال شد. منتظر پاسخ باشید.', Markup.inlineKeyboard([
+        [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
+      ]));
+    } catch (e) {
+      ctx.reply('❌ خطا در ارسال تصویر. لطفاً دوباره تلاش کنید یا با @' + ADMIN_USERNAME + ' تماس بگیرید.');
+    }
+    return;
+  }
 });
 
 bot.on('text', async (ctx) => {
@@ -1964,6 +2003,20 @@ bot.on('text', async (ctx) => {
     return showUserDetailMsg(ctx, targetId);
   }
 
+  // === Admin reply to support message ===
+  if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'reply_support') {
+    const targetId = adminState[userId].targetId;
+    const message = ctx.message.text.trim();
+    delete adminState[userId];
+    try {
+      await bot.telegram.sendMessage(targetId, `👤 پشتیبانی:\n\n${message}`, { parse_mode: 'Markdown' });
+      ctx.reply(`✅ پاسخ برای کاربر ${targetId} ارسال شد.`);
+    } catch (e) {
+      ctx.reply(`❌ خطا در ارسال پاسخ: ${e.message}`);
+    }
+    return;
+  }
+
   // === Admin settings text input handlers ===
   if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'edit_setting_referral') {
     const val = parseInt(ctx.message.text.replace(/[^0-9]/g, ''));
@@ -2284,6 +2337,27 @@ bot.on('text', async (ctx) => {
     ];
 
     ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+    return;
+  }
+
+  // === Support mode: forward user text to admin ===
+  if (userState[userId] && userState[userId].action === 'support_mode') {
+    const header = `📨 پیام پشتیبانی از @${ctx.from.username || 'ندارد'} (${userId}):`;
+    try {
+      const forwarded = await bot.telegram.forwardMessage(ADMIN_ID, ctx.chat.id, ctx.message.message_id);
+      // Send a header above the forwarded message
+      await bot.telegram.sendMessage(ADMIN_ID, header, {
+        reply_markup: {
+          inline_keyboard: [[{ text: '✉️ پاسخ', callback_data: `admin_reply_support_${userId}` }]],
+        },
+      });
+      adminForwardMap.set(forwarded.message_id, userId);
+      ctx.reply('✅ پیام شما برای پشتیبانی ارسال شد. منتظر پاسخ باشید.', Markup.inlineKeyboard([
+        [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
+      ]));
+    } catch (e) {
+      ctx.reply('❌ خطا در ارسال پیام. لطفاً دوباره تلاش کنید یا با @' + ADMIN_USERNAME + ' تماس بگیرید.');
+    }
     return;
   }
 
@@ -2794,16 +2868,16 @@ bot.action('renew_service', (ctx) => {
 
 bot.action('support', (ctx) => {
   safeAnswer(ctx);
+  userState[ctx.from.id] = { action: 'support_mode' };
   const text =
     `👤 پشتیبانی\n\n` +
-    `برای ارتباط با پشتیبانی روی دکمه زیر کلیک کنید:\n\n` +
-    `🆔 @${ADMIN_USERNAME}\n\n` +
+    `پیام یا عکس خود را ارسال کنید، مستقیماً برای پشتیبانی فرستاده می‌شود.\n\n` +
+    `🆔 @${ADMIN_USERNAME}\n` +
     `⏰ پاسخگویی در ساعات کاری انجام می‌شود.`;
 
   safeEdit(ctx, text, {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '📞 پیام به پشتیبانی', url: `https://t.me/${ADMIN_USERNAME}` }],
         [{ text: 'بازگشت به منوی اصلی ◀️', callback_data: 'back_to_menu', style: buttonStyles ? 'danger' : undefined }],
       ],
     },
