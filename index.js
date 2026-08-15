@@ -16,37 +16,41 @@ let PANEL_URL = process.env.PANEL_URL || 'https://vip-03.fl-sub.site:2096';
 let PANEL_USERNAME = process.env.PANEL_USERNAME || 'b69_Amin1';
 let PANEL_PASSWORD = process.env.PANEL_PASSWORD || '$iwbf*2V5*LvYC';
 
-// Panel API
-let panelToken = null;
-let panelTokenExpiry = 0;
+// Panel API - Multi-panel support
+// Per-panel token cache: { panelName: { token, expiry, detectedApiPath } }
+const panelTokenCache = {};
 
-// Cache for detected API path
-let detectedApiPath = null;
+function getPanelToken(panelName) {
+  const creds = getPanelCredentials(panelName);
+  const baseUrl = creds.url.replace(/\/+$/, '');
+  const hostname = new URL(baseUrl).hostname;
+  const port = new URL(baseUrl).port || 443;
 
-function getPanelToken() {
+  // Initialize cache for this panel if not exists
+  if (!panelTokenCache[panelName]) {
+    panelTokenCache[panelName] = { token: null, expiry: 0, detectedApiPath: null };
+  }
+  const cache = panelTokenCache[panelName];
+
   return new Promise((resolve, reject) => {
-    if (panelToken && Date.now() < panelTokenExpiry) return resolve(panelToken);
-
-    const baseUrl = PANEL_URL.replace(/\/+$/, '');
-    const hostname = new URL(baseUrl).hostname;
-    const port = new URL(baseUrl).port || 443;
+    if (cache.token && Date.now() < cache.expiry) return resolve(cache.token);
 
     // Common API paths to try
-    const apiPaths = detectedApiPath
-      ? [detectedApiPath]  // Use cached path first
+    const apiPaths = cache.detectedApiPath
+      ? [cache.detectedApiPath]  // Use cached path first
       : ['/api/admin/token', '/dashboard/api/admin/token', '/xui/api/admin/token', '/api/v1/admin/token'];
 
     let pathIndex = 0;
 
     const tryPath = (useJson) => {
       if (pathIndex >= apiPaths.length) {
-        return reject(new Error('مسیر API پیدا نشد. آدرس پنل را بررسی کنید.'));
+        return reject(new Error(`مسیر API برای پنل ${panelName} پیدا نشد. آدرس پنل را بررسی کنید.`));
       }
 
       const apiPath = apiPaths[pathIndex];
       const data = useJson
-        ? JSON.stringify({ username: PANEL_USERNAME, password: PANEL_PASSWORD })
-        : `grant_type=&username=${PANEL_USERNAME}&password=${encodeURIComponent(PANEL_PASSWORD)}`;
+        ? JSON.stringify({ username: creds.username, password: creds.password })
+        : `grant_type=&username=${creds.username}&password=${encodeURIComponent(creds.password)}`;
 
       const options = {
         hostname: hostname,
@@ -68,11 +72,11 @@ function getPanelToken() {
           try {
             const j = JSON.parse(body);
             if (j.access_token) {
-              panelToken = j.access_token;
-              panelTokenExpiry = Date.now() + 3300000;
-              detectedApiPath = apiPath; // Cache the working path
-              console.log(`[PANEL] API path detected: ${apiPath}`);
-              resolve(panelToken);
+              cache.token = j.access_token;
+              cache.expiry = Date.now() + 3300000;
+              cache.detectedApiPath = apiPath; // Cache the working path
+              console.log(`[PANEL:${panelName}] API path detected: ${apiPath}`);
+              resolve(cache.token);
             } else if (useJson) {
               tryPath(false); // Try form-urlencoded
             } else {
@@ -113,18 +117,22 @@ function getPanelToken() {
     tryPath(true);
   });
 }
-function panelApi(method, apiPath, bodyData) {
+
+function panelApi(panelName, method, apiPath, bodyData) {
   return new Promise((resolve, reject) => {
-    getPanelToken().then(token => {
-      const baseUrl = PANEL_URL.replace(/\/+$/, '');
+    getPanelToken(panelName).then(token => {
+      const creds = getPanelCredentials(panelName);
+      const baseUrl = creds.url.replace(/\/+$/, '');
       const hostname = new URL(baseUrl).hostname;
       const port = new URL(baseUrl).port || 443;
 
+      const cache = panelTokenCache[panelName];
+
       // Build full API path
       let fullPath;
-      if (detectedApiPath) {
+      if (cache.detectedApiPath) {
         // Extract base prefix from detected path (e.g., '/dashboard/api/admin/token' -> '/dashboard')
-        const base = detectedApiPath.replace('/api/admin/token', '');
+        const base = cache.detectedApiPath.replace('/api/admin/token', '');
         fullPath = base + '/api' + apiPath;
       } else {
         fullPath = '/api' + apiPath;
@@ -162,10 +170,10 @@ function panelApi(method, apiPath, bodyData) {
 }
 
 // Fetch live user info from panel
-async function fetchPanelUserInfo(panelUsername) {
+async function fetchPanelUserInfo(panelName, panelUsername) {
   if (!panelUsername) return null;
   try {
-    const data = await panelApi('GET', `/user/${panelUsername}`);
+    const data = await panelApi(panelName, 'GET', `/user/${panelUsername}`);
     if (data && data.username) return data;
   } catch (e) {}
   return null;
@@ -177,27 +185,31 @@ async function autoDeliverOrder(orderId, ctx) {
   if (!order) return false;
 
   const panel = order.panel || 'pasarguard';
+  const creds = getPanelCredentials(panel);
   const dataLimitBytes = order.plan_gb * 1024 * 1024 * 1024;
   const expireUnix = Math.floor(Date.now() / 1000) + order.validity * 86400;
   const panelUsername = `fastxline_${Math.floor(1000 + Math.random() * 9000)}`;
 
   try {
+    // Discover group IDs for this panel
+    const panelGroupIds = await discoverGroupIds(panel);
+
     // Create user on panel
-    const created = await panelApi('POST', '/user', {
+    const created = await panelApi(panel, 'POST', '/user', {
       username: panelUsername,
       data_limit: dataLimitBytes,
       expire: expireUnix,
       note: `Order #${orderId} | User: ${order.user_id}`,
-      group_ids: discoveredGroupIds.length > 0 ? discoveredGroupIds : [1, 2],
+      group_ids: panelGroupIds.length > 0 ? panelGroupIds : [1, 2],
     });
 
     if (!created || !created.username) {
       throw new Error('Panel user creation failed: ' + JSON.stringify(created));
     }
 
-    const subUrl = created.subscription_url.startsWith('http') 
-      ? created.subscription_url 
-      : 'https://' + new URL(PANEL_URL).host + created.subscription_url;
+    const subUrl = created.subscription_url.startsWith('http')
+      ? created.subscription_url
+      : 'https://' + new URL(creds.url).host + created.subscription_url;
 
     // Generate QR via API
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(subUrl)}`;
@@ -240,47 +252,54 @@ async function autoDeliverOrder(orderId, ctx) {
     return false;
   }
 }
-let discoveredGroupIds = [];
+// Per-panel group IDs cache: { panelName: groupIds[] }
+const discoveredGroupIdsCache = {};
 
-async function discoverGroupIds() {
+async function discoverGroupIds(panelName) {
+  // Check cache first
+  if (discoveredGroupIdsCache[panelName]) {
+    return discoveredGroupIdsCache[panelName];
+  }
+
   // 1. First try /groups endpoint
   try {
-    const groups = await panelApi('GET', '/groups');
+    const groups = await panelApi(panelName, 'GET', '/groups');
     if (Array.isArray(groups) && groups.length > 0) {
-      discoveredGroupIds = groups.map(g => g.id || g).filter(id => typeof id === 'number');
-      if (discoveredGroupIds.length > 0) {
-        console.log('[GROUPS] Discovered from API:', discoveredGroupIds);
-        // Save to DB for future use
+      const groupIds = groups.map(g => g.id || g).filter(id => typeof id === 'number');
+      if (groupIds.length > 0) {
+        discoveredGroupIdsCache[panelName] = groupIds;
+        console.log(`[GROUPS:${panelName}] Discovered from API:`, groupIds);
+        // Save to DB for future use (per panel)
         try {
-          db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('group_ids', JSON.stringify(discoveredGroupIds));
+          db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(`group_ids_${panelName}`, JSON.stringify(groupIds));
         } catch (_) {}
-        return discoveredGroupIds;
+        return groupIds;
       }
     }
   } catch (e) {
-    console.log('[GROUPS] API /api/groups failed:', e.message);
+    console.log(`[GROUPS:${panelName}] API /api/groups failed:`, e.message);
   }
 
   // 2. Try to get from DB settings (saved from previous successful discovery)
   try {
-    const saved = db.prepare("SELECT value FROM settings WHERE key = 'group_ids'").get();
+    const saved = db.prepare("SELECT value FROM settings WHERE key = ?").get(`group_ids_${panelName}`);
     if (saved && saved.value) {
       const parsed = JSON.parse(saved.value);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        discoveredGroupIds = parsed;
-        console.log('[GROUPS] Loaded from DB settings:', discoveredGroupIds);
-        return discoveredGroupIds;
+        discoveredGroupIdsCache[panelName] = parsed;
+        console.log(`[GROUPS:${panelName}] Loaded from DB settings:`, parsed);
+        return parsed;
       }
     }
   } catch (e) {
-    console.log('[GROUPS] Failed to load from DB:', e.message);
+    console.log(`[GROUPS:${panelName}] Failed to load from DB:`, e.message);
   }
 
   // 3. If panel doesn't support groups or no groups found, use empty array
-  // The bot will fallback to [1, 2] when creating users (see autoDeliverOrder and free_test)
-  console.log('[GROUPS] No groups found - will use panel defaults');
-  discoveredGroupIds = [];
-  return discoveredGroupIds;
+  // The bot will fallback to [1, 2] when creating users
+  console.log(`[GROUPS:${panelName}] No groups found - will use panel defaults`);
+  discoveredGroupIdsCache[panelName] = [];
+  return [];
 }
 
 const fs = require('fs');
@@ -399,9 +418,9 @@ if (planCount === 0) {
 
 const panelCount = db.prepare('SELECT COUNT(*) as c FROM panels').get().c;
 if (panelCount === 0) {
-  const insertPanel = db.prepare('INSERT INTO panels (name, display_name, description) VALUES (?, ?, ?)');
-  insertPanel.run('pasarguard', 'Pasarguard', 'پنل Pasarguard - مناسب گیمینگ و ترید');
-  insertPanel.run('economic', 'اقتصادی', 'پنل اقتصادی - مناسب AI و وب گردی');
+  const insertPanel = db.prepare('INSERT INTO panels (name, display_name, description, url, username, password) VALUES (?, ?, ?, ?, ?, ?)');
+  insertPanel.run('pasarguard', 'Pasarguard', 'پنل Pasarguard - مناسب گیمینگ و ترید', PANEL_URL, PANEL_USERNAME, PANEL_PASSWORD);
+  insertPanel.run('economic', 'اقتصادی', 'پنل اقتصادی - مناسب AI و وب گردی', '', '', '');
 }
 
 try {
@@ -432,6 +451,11 @@ try { db.exec(`ALTER TABLE orders ADD COLUMN panel TEXT DEFAULT 'pasarguard'`); 
 try { db.exec(`ALTER TABLE orders ADD COLUMN qr_file_id TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE orders ADD COLUMN panel_username TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE orders ADD COLUMN sub_link TEXT`); } catch (_) {}
+
+// Panel credentials columns (multi-panel support)
+try { db.exec(`ALTER TABLE panels ADD COLUMN url TEXT`); } catch (_) {}
+try { db.exec(`ALTER TABLE panels ADD COLUMN username TEXT`); } catch (_) {}
+try { db.exec(`ALTER TABLE panels ADD COLUMN password TEXT`); } catch (_) {}
 
 db.prepare("UPDATE plans SET panel = 'pasarguard' WHERE panel = 'pasargad'").run();
 db.prepare("UPDATE orders SET panel = 'pasarguard' WHERE panel = 'pasargad'").run();
@@ -581,13 +605,17 @@ function saveSettings() {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('group_ids', JSON.stringify(discoveredGroupIds));
   panelToken = null; // Force new token after panel change
   detectedApiPath = null; // Clear detected API path
-  // Re-discover groups for new panel
-  discoverGroupIds().catch(() => {});
+  // Clear all panel token caches
+  Object.keys(panelTokenCache).forEach(key => {
+    panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
+  });
+  // Re-discover groups for all active panels
+  getActivePanels().forEach(p => discoverGroupIds(p.name).catch(() => {}));
 }
 
 loadSettings();
-// Discover group IDs on startup
-discoverGroupIds().catch(() => {});
+// Discover group IDs on startup for all active panels
+getActivePanels().forEach(p => discoverGroupIds(p.name).catch(() => {}));
 
 // Cleanup orphan plans: plans whose panel no longer exists
 try {
@@ -718,6 +746,24 @@ function getAllPanels() {
 
 function getPanelByName(name) {
   return db.prepare('SELECT * FROM panels WHERE name = ?').get(name);
+}
+
+// Get panel credentials (with fallback to global env vars)
+function getPanelCredentials(panelName) {
+  const panel = db.prepare('SELECT url, username, password FROM panels WHERE name = ?').get(panelName);
+  if (panel && panel.url && panel.username && panel.password) {
+    return {
+      url: panel.url,
+      username: panel.username,
+      password: panel.password
+    };
+  }
+  // Fallback to global settings
+  return {
+    url: PANEL_URL,
+    username: PANEL_USERNAME,
+    password: PANEL_PASSWORD
+  };
 }
 
 function getAllPlans() {
@@ -1294,9 +1340,14 @@ bot.action('free_test', async (ctx) => {
     await ctx.editMessageText('🔄 در حال ایجاد سرویس تست... لطفاً صبر کنید.');
 
     // Create user on panel (100MB for 24h)
+    const panelName = 'pasarguard'; // Default panel for free trial
+    const creds = getPanelCredentials(panelName);
     const panelUsername = 'fastxline_trial_' + Math.floor(1000 + Math.random() * 9000);
     const expireUnix = Math.floor(Date.now() / 1000) + 86400; // +24h
     const dataLimitBytes = 100 * 1024 * 1024; // 100 MB
+
+    // Discover group IDs for this panel
+    const panelGroupIds = await discoverGroupIds(panelName);
 
     // === Create user with ALL groups selected ===
     // group_ids: [1, 2] selects both "Exclusive" and "Standard" groups
@@ -1305,17 +1356,19 @@ bot.action('free_test', async (ctx) => {
       data_limit: dataLimitBytes,
       expire: expireUnix,
       note: 'Free trial from bot | User: ' + ctx.from.id,
-      group_ids: discoveredGroupIds.length > 0 ? discoveredGroupIds : [1, 2],  // Auto-discovered groups
+      group_ids: panelGroupIds.length > 0 ? panelGroupIds : [1, 2],  // Auto-discovered groups
     };
 
-    const created = await panelApi('POST', '/user', userPayload);
+    const created = await panelApi(panelName, 'POST', '/user', userPayload);
 
     if (!created || !created.username) {
       db.prepare('UPDATE users SET used_free_test = 0 WHERE user_id = ?').run(ctx.from.id);
       throw new Error(JSON.stringify(created));
     }
 
-    const subUrl = created.subscription_url.startsWith('http') ? created.subscription_url : 'https://' + new URL(PANEL_URL).host + created.subscription_url;
+    const subUrl = created.subscription_url.startsWith('http')
+      ? created.subscription_url
+      : 'https://' + new URL(creds.url).host + created.subscription_url;
     let expireDate = '';
     if (created.expire) {
       const d = new Date(created.expire);
@@ -1871,7 +1924,26 @@ bot.on('text', async (ctx) => {
 
     if (state.action === 'add_panel_description') {
       const description = ctx.message.text === 'رد کردن' ? null : ctx.message.text.trim();
-      db.prepare('INSERT INTO panels (name, display_name, description) VALUES (?, ?, ?)').run(state.name, state.display_name, description);
+      adminState[userId] = { action: 'add_panel_url', name: state.name, display_name: state.display_name, description };
+      return ctx.reply('🔗 آدرس پنل (URL) را وارد کنید:\n(مثال: https://panel.example.com:2096\nیا "رد کردن" برای استفاده از تنظیمات پیش‌فرض)');
+    }
+
+    if (state.action === 'add_panel_url') {
+      const url = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim().replace(/\/+$/, '');
+      adminState[userId] = { action: 'add_panel_username', name: state.name, display_name: state.display_name, description: state.description, url };
+      return ctx.reply('👤 یوزرنیم پنل را وارد کنید:\n(یا "رد کردن" برای استفاده از تنظیمات پیش‌فرض)');
+    }
+
+    if (state.action === 'add_panel_username') {
+      const username = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim();
+      adminState[userId] = { action: 'add_panel_password', name: state.name, display_name: state.display_name, description: state.description, url: state.url, username };
+      return ctx.reply('🔒 پسورد پنل را وارد کنید:\n(یا "رد کردن" برای استفاده از تنظیمات پیش‌فرض)');
+    }
+
+    if (state.action === 'add_panel_password') {
+      const password = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim();
+      db.prepare('INSERT INTO panels (name, display_name, description, url, username, password) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(state.name, state.display_name, state.description, state.url, state.username, password);
       delete adminState[userId];
       ctx.reply(`✅ پنل ${state.display_name} با موفقیت اضافه شد.`);
       // Re-show panels list
@@ -1958,6 +2030,145 @@ bot.on('text', async (ctx) => {
         [
           Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
           Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
+          Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+        ],
+        [
+          Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
+          Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
+        ],
+        [b('بازگشت ◀️', 'admin_panels', 'back')],
+      ];
+      return ctx.reply(text3, Markup.inlineKeyboard(buttons));
+    }
+
+    if (state.action === 'edit_panel_url') {
+      const url = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim().replace(/\/+$/, '');
+      db.prepare('UPDATE panels SET url = ? WHERE id = ?').run(url, state.panelId);
+      delete adminState[userId];
+      const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(state.panelId);
+      // Clear token cache for this panel
+      panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
+      ctx.reply(`✅ آدرس پنل بروزرسانی شد.`);
+      // Re-show detail
+      const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ? AND active = 1").get(panel.name).c;
+      const totalPlanCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
+      const orderCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE panel = ?").get(panel.name).c;
+      const status = panel.active ? '✅ فعال' : '❌ غیرفعال';
+      let text3 = '🔍 جزئیات پنل\n\n';
+      text3 += `شناسه: #${panel.id}\n`;
+      text3 += `نام: ${panel.name}\n`;
+      text3 += `نام نمایشی: ${panel.display_name}\n`;
+      text3 += `توضیحات: ${panel.description || '---'}\n`;
+      text3 += `وضعیت: ${status}\n`;
+      text3 += `پلن‌های فعال: ${planCount}\n`;
+      text3 += `کل پلن‌ها: ${totalPlanCount}\n`;
+      text3 += `سفارشات: ${orderCount}\n`;
+      text3 += `تاریخ ایجاد: ${panel.created_at}\n`;
+      const buttons = [
+        [
+          Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
+          Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
+          Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+        ],
+        [
+          Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
+          Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
+        ],
+        [b('بازگشت ◀️', 'admin_panels', 'back')],
+      ];
+      return ctx.reply(text3, Markup.inlineKeyboard(buttons));
+    }
+
+    if (state.action === 'edit_panel_username') {
+      const username = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim();
+      db.prepare('UPDATE panels SET username = ? WHERE id = ?').run(username, state.panelId);
+      delete adminState[userId];
+      const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(state.panelId);
+      // Clear token cache for this panel
+      panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
+      ctx.reply(`✅ یوزرنیم پنل بروزرسانی شد.`);
+      // Re-show detail
+      const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ? AND active = 1").get(panel.name).c;
+      const totalPlanCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
+      const orderCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE panel = ?").get(panel.name).c;
+      const status = panel.active ? '✅ فعال' : '❌ غیرفعال';
+      let text3 = '🔍 جزئیات پنل\n\n';
+      text3 += `شناسه: #${panel.id}\n`;
+      text3 += `نام: ${panel.name}\n`;
+      text3 += `نام نمایشی: ${panel.display_name}\n`;
+      text3 += `توضیحات: ${panel.description || '---'}\n`;
+      text3 += `وضعیت: ${status}\n`;
+      text3 += `پلن‌های فعال: ${planCount}\n`;
+      text3 += `کل پلن‌ها: ${totalPlanCount}\n`;
+      text3 += `سفارشات: ${orderCount}\n`;
+      text3 += `تاریخ ایجاد: ${panel.created_at}\n`;
+      const buttons = [
+        [
+          Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
+          Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
+          Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+        ],
+        [
+          Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
+          Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
+        ],
+        [b('بازگشت ◀️', 'admin_panels', 'back')],
+      ];
+      return ctx.reply(text3, Markup.inlineKeyboard(buttons));
+    }
+
+    if (state.action === 'edit_panel_password') {
+      const password = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim();
+      db.prepare('UPDATE panels SET password = ? WHERE id = ?').run(password, state.panelId);
+      delete adminState[userId];
+      const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(state.panelId);
+      // Clear token cache for this panel
+      panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
+      ctx.reply(`✅ پسورد پنل بروزرسانی شد.`);
+      // Re-show detail
+      const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ? AND active = 1").get(panel.name).c;
+      const totalPlanCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
+      const orderCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE panel = ?").get(panel.name).c;
+      const status = panel.active ? '✅ فعال' : '❌ غیرفعال';
+      let text3 = '🔍 جزئیات پنل\n\n';
+      text3 += `شناسه: #${panel.id}\n`;
+      text3 += `نام: ${panel.name}\n`;
+      text3 += `نام نمایشی: ${panel.display_name}\n`;
+      text3 += `توضیحات: ${panel.description || '---'}\n`;
+      text3 += `وضعیت: ${status}\n`;
+      text3 += `پلن‌های فعال: ${planCount}\n`;
+      text3 += `کل پلن‌ها: ${totalPlanCount}\n`;
+      text3 += `سفارشات: ${orderCount}\n`;
+      text3 += `تاریخ ایجاد: ${panel.created_at}\n`;
+      const buttons = [
+        [
+          Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
+          Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
+          Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
         ],
         [
           Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
@@ -2172,13 +2383,14 @@ bot.on('text', async (ctx) => {
 
   if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'edit_setting_panel_url') {
     PANEL_URL = ctx.message.text.trim().replace(/\/+$/, '');
-    panelToken = null;
-    panelTokenExpiry = 0;
-    detectedApiPath = null;
+    // Clear all panel token caches since global URL changed
+    Object.keys(panelTokenCache).forEach(key => {
+      panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
+    });
     saveSettings();
     const from = adminState[userId].from;
     delete adminState[userId];
-    ctx.reply(`✅ آدرس پنل به \`${PANEL_URL}\` تغییر کرد.`, { parse_mode: 'Markdown' });
+    ctx.reply(`✅ آدرس پنل پیش‌فرض به \`${PANEL_URL}\` تغییر کرد.`, { parse_mode: 'Markdown' });
     // Return to quick panel menu if came from there
     if (from === 'admin_quick_panel') {
       return adminQuickPanel(ctx);
@@ -2193,13 +2405,14 @@ bot.on('text', async (ctx) => {
 
   if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'edit_setting_panel_username') {
     PANEL_USERNAME = ctx.message.text.trim();
-    panelToken = null;
-    panelTokenExpiry = 0;
-    detectedApiPath = null;
+    // Clear all panel token caches since global username changed
+    Object.keys(panelTokenCache).forEach(key => {
+      panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
+    });
     saveSettings();
     const from = adminState[userId].from;
     delete adminState[userId];
-    ctx.reply(`✅ یوزرنیم پنل به \`${PANEL_USERNAME}\` تغییر کرد.`, { parse_mode: 'Markdown' });
+    ctx.reply(`✅ یوزرنیم پنل پیش‌فرض به \`${PANEL_USERNAME}\` تغییر کرد.`, { parse_mode: 'Markdown' });
     // Return to quick panel menu if came from there
     if (from === 'admin_quick_panel') {
       return adminQuickPanel(ctx);
@@ -2214,13 +2427,14 @@ bot.on('text', async (ctx) => {
 
   if (userId === ADMIN_ID && adminState[userId] && adminState[userId].action === 'edit_setting_panel_password') {
     PANEL_PASSWORD = ctx.message.text.trim();
-    panelToken = null;
-    panelTokenExpiry = 0;
-    detectedApiPath = null;
+    // Clear all panel token caches since global password changed
+    Object.keys(panelTokenCache).forEach(key => {
+      panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
+    });
     saveSettings();
     const from = adminState[userId].from;
     delete adminState[userId];
-    ctx.reply('✅ پسورد پنل با موفقیت تغییر کرد.');
+    ctx.reply('✅ پسورد پنل پیش‌فرض با موفقیت تغییر کرد.');
     // Return to quick panel menu if came from there
     if (from === 'admin_quick_panel') {
       return adminQuickPanel(ctx);
@@ -2589,8 +2803,9 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
 
   // Try to fetch live info in background
   try {
+    const panelName = 'pasarguard'; // Default panel for free trial
     const userInfo = await Promise.race([
-      panelApi('GET', '/user/ft' + ctx.from.id),
+      panelApi(panelName, 'GET', '/user/ft' + ctx.from.id),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
     ]);
     if (userInfo) {
@@ -2638,8 +2853,9 @@ bot.action(/^refresh_trial_(\d+)$/, async (ctx) => {
   await safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'my_services', 'back')]]) });
 
   try {
+    const panelName = 'pasarguard'; // Default panel for free trial
     const userInfo = await Promise.race([
-      panelApi('GET', '/user/ft' + ctx.from.id),
+      panelApi(panelName, 'GET', '/user/ft' + ctx.from.id),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
     ]);
     if (userInfo) {
@@ -2704,7 +2920,8 @@ bot.action(/^service_detail_order_(\d+)$/, async (ctx) => {
   // Try to fetch live data from panel
   let liveData = null;
   if (order.panel_username) {
-    liveData = await fetchPanelUserInfo(order.panel_username);
+    const panel = order.panel || 'pasarguard';
+    liveData = await fetchPanelUserInfo(panel, order.panel_username);
   }
 
   let text = `📦 *${escapeMarkdown(order.plan_name)}*\n━━━━━━━━━━━━━━━━━━\n\n`;
@@ -2826,7 +3043,8 @@ bot.action(/^confirm_delete_(\d+)$/, async (ctx) => {
   // Delete user from panel if panel_username exists
   if (order.panel_username) {
     try {
-      await panelApi('DELETE', `/user/${order.panel_username}`);
+      const panel = order.panel || 'pasarguard';
+      await panelApi(panel, 'DELETE', `/user/${order.panel_username}`);
     } catch (e) {}
   }
 
@@ -3459,6 +3677,9 @@ bot.action(/^admin_panel_detail_(\d+)$/, async (ctx) => {
   const totalPlanCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
   const orderCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE panel = ?").get(panel.name).c;
 
+  const creds = getPanelCredentials(panel.name);
+  const hasCustomCreds = creds.url !== PANEL_URL || creds.username !== PANEL_USERNAME || creds.password !== PANEL_PASSWORD;
+
   let text = '🔍 جزئیات پنل\n\n';
   text += `شناسه: #${panel.id}\n`;
   text += `نام: ${panel.name}\n`;
@@ -3469,11 +3690,25 @@ bot.action(/^admin_panel_detail_(\d+)$/, async (ctx) => {
   text += `کل پلن‌ها: ${totalPlanCount}\n`;
   text += `سفارشات: ${orderCount}\n`;
   text += `تاریخ ایجاد: ${panel.created_at}\n`;
+  if (hasCustomCreds) {
+    text += `\n🔐 credentials: ✅ تنظیم شده (اختصاصی)\n`;
+    text += `   URL: ${creds.url}\n`;
+    text += `   Username: ${creds.username}\n`;
+  } else {
+    text += `\n🔐 credentials: 🌐 استفاده از تنظیمات سراسری\n`;
+  }
 
   const buttons = [
     [
       Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
       Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
+    ],
+    [
+      Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
+      Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
+    ],
+    [
+      Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
     ],
     [
       Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
@@ -3507,6 +3742,40 @@ bot.action(/^admin_edit_panel_desc_(\d+)$/, async (ctx) => {
   if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
   adminState[ADMIN_ID] = { action: 'edit_panel_desc', panelId };
   ctx.reply(`📝 توضیحات فعلی: ${panel.description || '---'}\n\nتوضیحات جدید را وارد کنید:\n(یا "رد کردن" برای حذف توضیحات)`, Markup.inlineKeyboard([[b('لغو', `admin_panel_detail_${panelId}`, 'back')]]));
+});
+
+bot.action(/^admin_edit_panel_url_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panelId = Number(ctx.match[1]);
+  const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(panelId);
+  if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
+  const creds = getPanelCredentials(panel.name);
+  const currentUrl = creds.url || '--- (تنظیمات سراسری)';
+  adminState[ADMIN_ID] = { action: 'edit_panel_url', panelId };
+  ctx.reply(`🔗 آدرس فعلی: ${currentUrl}\n\nآدرس جدید را وارد کنید:\n(یا "رد کردن" برای پاک کردن و استفاده از تنظیمات سراسری)`, Markup.inlineKeyboard([[b('لغو', `admin_panel_detail_${panelId}`, 'back')]]));
+});
+
+bot.action(/^admin_edit_panel_username_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panelId = Number(ctx.match[1]);
+  const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(panelId);
+  if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
+  const creds = getPanelCredentials(panel.name);
+  const currentUser = creds.username || '--- (تنظیمات سراسری)';
+  adminState[ADMIN_ID] = { action: 'edit_panel_username', panelId };
+  ctx.reply(`👤 یوزرنیم فعلی: ${currentUser}\n\nیوزرنیم جدید را وارد کنید:\n(یا "رد کردن" برای پاک کردن و استفاده از تنظیمات سراسری)`, Markup.inlineKeyboard([[b('لغو', `admin_panel_detail_${panelId}`, 'back')]]));
+});
+
+bot.action(/^admin_edit_panel_password_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panelId = Number(ctx.match[1]);
+  const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(panelId);
+  if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
+  adminState[ADMIN_ID] = { action: 'edit_panel_password', panelId };
+  ctx.reply(`🔒 پسورد فعلی: ********\n\nپسورد جدید را وارد کنید:\n(یا "رد کردن" برای پاک کردن و استفاده از تنظیمات سراسری)`, Markup.inlineKeyboard([[b('لغو', `admin_panel_detail_${panelId}`, 'back')]]));
 });
 
 bot.action(/^admin_toggle_panel_(\d+)$/, async (ctx) => {
@@ -3936,6 +4205,21 @@ bot.action(/^admin_resend_trial_(\d+)$/, async (ctx) => {
 function adminBotSettingsText() {
   const maskedPass = PANEL_PASSWORD ? '••••••••' : '---';
   const welcomeImgStatus = welcomeImage ? '✅ تنظیم شده' : '❌ تنظیم نشده';
+
+  // Get panels info
+  const panels = getAllPanels();
+  let panelsText = '';
+  panels.forEach((p) => {
+    const creds = getPanelCredentials(p.name);
+    const hasCustomCreds = creds.url !== PANEL_URL || creds.username !== PANEL_USERNAME || creds.password !== PANEL_PASSWORD;
+    panelsText += `   🔹 ${p.display_name} (${p.name}): ${hasCustomCreds ? '✅ اختصاصی' : '🌐 سراسری'}\n`;
+    if (hasCustomCreds) {
+      panelsText += `      URL: ${creds.url}\n`;
+      panelsText += `      Username: ${creds.username}\n`;
+    }
+  });
+  if (!panelsText) panelsText = '   (هیچ پنلی تعریف نشده)';
+
   return `⚙️ *تنظیمات ربات*\n━━━━━━━━━━━━━━━━━━\n\n` +
     `💰 *مالی*\n` +
     `   📌 پاداش دعوت: ${formatNumber(referralReward)} تومان\n` +
@@ -3943,10 +4227,12 @@ function adminBotSettingsText() {
     `   👤 نام صاحب کارت: ${CARD_OWNER || '---'}\n` +
     `   💰 حداقل شارژ: ${formatNumber(minCharge)} تومان\n` +
     `   💰 حداکثر شارژ: ${formatNumber(maxCharge)} تومان\n\n` +
-    `🌐 *تنظیمات API پنل VPN*\n` +
+    `🌐 *تنظیمات API پنل VPN (سراسری)*\n` +
     `   🔗 آدرس پنل: \`${PANEL_URL}\`\n` +
     `   👤 یوزرنیم: \`${PANEL_USERNAME}\`\n` +
     `   🔒 پسورد: \`${maskedPass}\`\n\n` +
+    `🖥 *پنل‌ها و credentials اختصاصی:*\n` +
+    panelsText + '\n' +
     `📝 *پیام‌ها*\n` +
     `   👋 پیام خوش‌آمدگویی (${welcomeMessage.length} کاراکتر)\n` +
     `   🖼 تصویر خوش‌آمدگویی: ${welcomeImgStatus}\n` +
@@ -3967,6 +4253,7 @@ function adminBotSettingsKeyboard() {
     [Markup.button.callback('📢 پیام عضویت', 'admin_edit_channel_msg')],
     [Markup.button.callback('📢 نام کانال', 'admin_edit_channel_name')],
     [Markup.button.callback('👤 پشتیبانی', 'admin_edit_support_username')],
+    [Markup.button.callback('🖥 مدیریت پنل‌ها', 'admin_panels')],
     [b('بازگشت ◀️', 'back_to_menu', 'back')],
   ]);
 }
@@ -4210,22 +4497,25 @@ bot.launch();
 console.log('🤖 Bot is running...');
 
 async function adminQuickPanel(ctx) {
-  const text = `🔄 <b>تغییر پنل VPN</b>
+  const panels = getAllPanels();
+  let text = `🔄 <b>تغییر پنل VPN (سراسری)</b>\n\n`;
+  text += `🔗 <b>آدرس پیش‌فرض:</b> ${PANEL_URL}\n`;
+  text += `👤 <b>یوزرنیم پیش‌فرض:</b> ${PANEL_USERNAME}\n`;
+  text += `🔑 <b>رمز پیش‌فرض:</b> ${"*".repeat(PANEL_PASSWORD.length)}\n\n`;
+  text += `📝 برای تغییر تنظیمات سراسری یا مدیریت پنل‌های اختصاصی، گزینه زیر را انتخاب کنید:`;
 
-🔗 <b>آدرس فعلی:</b> ${PANEL_URL}
-👤 <b>یوزرنیم:</b> ${PANEL_USERNAME}
-🔑 <b>رمز:</b> ${"*".repeat(PANEL_PASSWORD.length)}
+  const buttons = [
+    [Markup.button.callback('🔗 تغییر آدرس پیش‌فرض', 'admin_quick_url')],
+    [Markup.button.callback('👤 تغییر یوزرنیم پیش‌فرض', 'admin_quick_user')],
+    [Markup.button.callback('🔑 تغییر رمز پیش‌فرض', 'admin_quick_pass')],
+    [Markup.button.callback('🧪 تست اتصال پیش‌فرض', 'admin_quick_test')],
+    [Markup.button.callback('🖥 مدیریت پنل‌ها (اختصاصی)', 'admin_panels')],
+    [b('◀️ بازگشت', 'back_to_menu', 'back')],
+  ];
 
-📝 کدام را می‌خواهید تغییر دهید?`;
   await safeEdit(ctx, text, {
     parse_mode: 'html',
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('🔗 تغییر آدرس پنل', 'admin_quick_url')],
-      [Markup.button.callback('👤 تغییر یوزرنیم', 'admin_quick_user')],
-      [Markup.button.callback('🔑 تغییر رمز عبور', 'admin_quick_pass')],
-      [Markup.button.callback('🧪 تست اتصال', 'admin_quick_test')],
-      [b('◀️ بازگشت', 'back_to_menu', 'back')],
-    ]),
+    ...Markup.inlineKeyboard(buttons),
   });
 }
 
@@ -4233,24 +4523,9 @@ async function adminQuickPanel(ctx) {
 bot.action('admin_quick_panel', async (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
-
-  const text = `🔄 <b>تغییر پنل VPN</b>\n\n` +
-    `🔗 <b>آدرس فعلی:</b> ${PANEL_URL}\n` +
-    `👤 <b>یوزرنیم:</b> ${PANEL_USERNAME}\n` +
-    `🔑 <b>رمز:</b> ${'*'.repeat(PANEL_PASSWORD.length)}\n\n` +
-    `📝 کدام را می‌خواهید تغییر دهید؟`;
-
-  await safeEdit(ctx, text, {
-    parse_mode: 'HTML',
-    ...Markup.inlineKeyboard([
-      [Markup.button.callback('🔗 تغییر آدرس پنل', 'admin_quick_url')],
-      [Markup.button.callback('👤 تغییر یوزرنیم', 'admin_quick_user')],
-      [Markup.button.callback('🔑 تغییر رمز', 'admin_quick_pass')],
-      [Markup.button.callback('🧪 تست اتصال', 'admin_quick_test')],
-      [b('◀️ بازگشت', 'back_to_menu', 'back')],
-    ]),
-  });
+  await adminQuickPanel(ctx);
 });
+
 bot.action('admin_quick_url', (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
@@ -4285,18 +4560,22 @@ bot.action('admin_quick_test', async (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
   try {
-    await ctx.editMessageText('🧪 در حال تست اتصال پنل...');
+    await ctx.editMessageText('🧪 در حال تست اتصال پنل پیش‌فرض...');
 
-    // Clear cache and test fresh connection
-    panelToken = null;
-    panelTokenExpiry = 0;
-    detectedApiPath = null;
+    // Test connection for the default panel
+    const panelName = 'pasarguard';
+    // Clear cache for this panel
+    panelTokenCache[panelName] = { token: null, expiry: 0, detectedApiPath: null };
 
-    const token = await getPanelToken();
-    const users = await panelApi('GET', '/user?limit=1');
+    const token = await getPanelToken(panelName);
+    const users = await panelApi(panelName, 'GET', '/user?limit=1');
     const userCount = users.total || (Array.isArray(users) ? users.length : '?');
 
-    await ctx.reply(`✅ اتصال برقرار!\n\n🔗 ${PANEL_URL}\n👤 ${PANEL_USERNAME}\n📡 مسیر API: ${detectedApiPath}\n👥 کاربران: ${userCount}`);
+    // Get the detected API path for this panel
+    const cache = panelTokenCache[panelName];
+    const apiPath = cache?.detectedApiPath || 'نامشخص';
+
+    await ctx.reply(`✅ اتصال برقرار!\n\n🔗 ${PANEL_URL}\n👤 ${PANEL_USERNAME}\n📡 مسیر API: ${apiPath}\n👥 کاربران: ${userCount}`);
   } catch (err) {
     await ctx.reply(`❌ خطا در اتصال:\n\n🔗 ${PANEL_URL}\n👤 ${PANEL_USERNAME}\n\nخطا: ${err.message}`);
   }
