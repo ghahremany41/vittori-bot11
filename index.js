@@ -1618,7 +1618,7 @@ bot.on('photo', async (ctx) => {
     const photoFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
     try {
       const forwarded = await bot.telegram.forwardMessage(ADMIN_ID, ctx.chat.id, ctx.message.message_id);
-      await bot.telegram.sendMessage(ADMIN_ID, `📨 تصویر پشتیبانی از @${ctx.from.username || 'ندارد'} (${ctx.from.id}):`, {
+      await bot.telegram.sendMessage(ADMIN_ID, `📨 تصویر پشتیبانی از @${ctx.from.username || 'ندارد'}:`, {
         reply_markup: {
           inline_keyboard: [[{ text: '✉️ پاسخ', callback_data: `admin_reply_support_${ctx.from.id}` }]],
         },
@@ -2342,7 +2342,7 @@ bot.on('text', async (ctx) => {
 
   // === Support mode: forward user text to admin ===
   if (userState[userId] && userState[userId].action === 'support_mode') {
-    const header = `📨 پیام پشتیبانی از @${ctx.from.username || 'ندارد'} (${userId}):`;
+    const header = `📨 پیام پشتیبانی از @${ctx.from.username || 'ندارد'}:`;
     try {
       const forwarded = await bot.telegram.forwardMessage(ADMIN_ID, ctx.chat.id, ctx.message.message_id);
       // Send a header above the forwarded message
