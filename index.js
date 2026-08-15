@@ -1612,26 +1612,6 @@ bot.on('photo', async (ctx) => {
     delete userState[ctx.from.id];
     return;
   }
-
-  // Support mode: forward user photo to admin
-  if (userState[ctx.from.id] && userState[ctx.from.id].action === 'support_mode') {
-    const photoFileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
-    try {
-      const forwarded = await bot.telegram.forwardMessage(ADMIN_ID, ctx.chat.id, ctx.message.message_id);
-      await bot.telegram.sendMessage(ADMIN_ID, `📨 تصویر پشتیبانی از @${ctx.from.username || 'ندارد'}:`, {
-        reply_markup: {
-          inline_keyboard: [[{ text: '✉️ پاسخ', callback_data: `admin_reply_support_${ctx.from.id}` }]],
-        },
-      });
-      adminForwardMap.set(forwarded.message_id, ctx.from.id);
-      ctx.reply('✅ تصویر شما برای پشتیبانی ارسال شد. منتظر پاسخ باشید.', Markup.inlineKeyboard([
-        [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
-      ]));
-    } catch (e) {
-      ctx.reply('❌ خطا در ارسال تصویر. لطفاً دوباره تلاش کنید یا با @' + ADMIN_USERNAME + ' تماس بگیرید.');
-    }
-    return;
-  }
 });
 
 bot.on('text', async (ctx) => {
@@ -2340,27 +2320,6 @@ bot.on('text', async (ctx) => {
     return;
   }
 
-  // === Support mode: forward user text to admin ===
-  if (userState[userId] && userState[userId].action === 'support_mode') {
-    const header = `📨 پیام پشتیبانی از @${ctx.from.username || 'ندارد'}:`;
-    try {
-      const forwarded = await bot.telegram.forwardMessage(ADMIN_ID, ctx.chat.id, ctx.message.message_id);
-      // Send a header above the forwarded message
-      await bot.telegram.sendMessage(ADMIN_ID, header, {
-        reply_markup: {
-          inline_keyboard: [[{ text: '✉️ پاسخ', callback_data: `admin_reply_support_${userId}` }]],
-        },
-      });
-      adminForwardMap.set(forwarded.message_id, userId);
-      ctx.reply('✅ پیام شما برای پشتیبانی ارسال شد. منتظر پاسخ باشید.', Markup.inlineKeyboard([
-        [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
-      ]));
-    } catch (e) {
-      ctx.reply('❌ خطا در ارسال پیام. لطفاً دوباره تلاش کنید یا با @' + ADMIN_USERNAME + ' تماس بگیرید.');
-    }
-    return;
-  }
-
 });
 
 bot.action(/^admin_confirm_(\d+)$/, (ctx) => {
@@ -2868,12 +2827,38 @@ bot.action('renew_service', (ctx) => {
 
 bot.action('support', (ctx) => {
   safeAnswer(ctx);
-  userState[ctx.from.id] = { action: 'support_mode' };
+  const userId = ctx.from.id;
+  const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId);
+  const orderCount = db.prepare('SELECT COUNT(*) as c FROM orders WHERE user_id = ?').get(userId).c;
+  const wallet = getWallet(userId);
+
+  // Send user info to admin ONCE (no spam on repeated messages)
+  const adminInfo =
+    `📨 *درخواست پشتیبانی جدید*\n\n` +
+    `👤 کاربر: @${escapeMarkdown(ctx.from.username || 'ندارد')}\n` +
+    `🔹 آیدی عددی: \`${userId}\`\n` +
+    `🔹 نام: ${escapeMarkdown(ctx.from.first_name || 'ندارد')}\n` +
+    `🔹 تعداد سفارشات: ${orderCount}\n` +
+    `🔹 موجودی کیف پول: ${formatNumber(wallet)} تومان\n\n` +
+    `📝 کاربر منتظر پاسخ شماست. برای پاسخ دکمه زیر را بزنید:`;
+
+  try {
+    bot.telegram.sendMessage(ADMIN_ID, adminInfo, {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [[{ text: '✉️ پاسخ', callback_data: `admin_reply_support_${userId}` }]],
+      },
+    }).catch(() => {});
+  } catch (_) {}
+
   const text =
     `👤 پشتیبانی\n\n` +
-    `پیام یا عکس خود را ارسال کنید، مستقیماً برای پشتیبانی فرستاده می‌شود.\n\n` +
+    `درخواست شما ثبت شد و اطلاعات شما برای پشتیبانی ارسال شد.\n` +
+    `پشتیبانی در اسرع وقت با شما تماس خواهد گرفت.\n\n` +
     `🆔 @${ADMIN_USERNAME}\n` +
     `⏰ پاسخگویی در ساعات کاری انجام می‌شود.`;
+
+  delete userState[userId]; // clear state so repeated messages won't spam admin
 
   safeEdit(ctx, text, {
     reply_markup: {
