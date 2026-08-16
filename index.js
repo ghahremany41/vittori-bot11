@@ -209,17 +209,21 @@ async function autoDeliverOrder(orderId, ctx) {
           // Clear cache so next time it re-discovers
           delete discoveredGroupIdsCache[panel];
         } else {
-          // Third attempt: no group_ids
+          // Third attempt: no group_ids (panel will use defaults/all)
           panelGroupIds = [];
         }
 
         // Create user on panel
+        // Try to select all groups by passing all discovered group IDs
+        // If no groups discovered, omit group_ids to let panel use default/all
         const userPayload = {
           username: panelUsername,
           data_limit: dataLimitBytes,
           expire: expireUnix,
           note: `Order #${orderId} | User: ${order.user_id}`,
         };
+        // Pass all discovered group IDs to select all available groups
+        // If empty, panel typically defaults to all groups
         if (panelGroupIds.length > 0) {
           userPayload.group_ids = panelGroupIds;
         }
@@ -1406,6 +1410,7 @@ bot.action('free_test', async (ctx) => {
           panelGroupIds = [1, 2];
           delete discoveredGroupIdsCache[panelName];
         } else {
+          // Third attempt: no group_ids (panel will use defaults/all)
           panelGroupIds = [];
         }
 
@@ -1415,6 +1420,8 @@ bot.action('free_test', async (ctx) => {
           expire: expireUnix,
           note: 'Free trial from bot | User: ' + ctx.from.id,
         };
+        // Pass all discovered group IDs to select all available groups
+        // If empty, panel typically defaults to all groups
         if (panelGroupIds.length > 0) {
           userPayload.group_ids = panelGroupIds;
         }
