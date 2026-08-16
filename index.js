@@ -329,19 +329,23 @@ async function discoverGroupIds(panelName) {
     try {
       const groups = await panelApi(panelName, 'GET', endpoint);
       if (Array.isArray(groups) && groups.length > 0) {
-        // For /api/inbounds, groups are inbound names, extract IDs if available
-        const groupIds = groups.map(g => g.id || g.inbound_id || g).filter(id => typeof id === 'number' || typeof id === 'string');
+        // Only use numeric IDs. Some panels (like this tunnel panel) return string names
+        // from /api/inbounds which are NOT valid group_ids (panel expects integers).
+        // If we only get strings, return empty to let panel use default/all groups.
+        const groupIds = groups
+          .map(g => g.id || g.inbound_id || (typeof g === 'number' ? g : null))
+          .filter(id => typeof id === 'number');
+
         if (groupIds.length > 0) {
-          // If we got strings (names), use them as-is for the panel
-          // Panel APIs typically accept either IDs or names
           discoveredGroupIdsCache[panelName] = groupIds;
           console.log(`[GROUPS:${panelName}] Discovered from ${endpoint}:`, groupIds);
-          // Save to DB for future use (per panel)
           try {
             db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(`group_ids_${panelName}`, JSON.stringify(groupIds));
           } catch (_) {}
           return groupIds;
         }
+        // Array has items but no numeric IDs - don't use these as group_ids
+        console.log(`[GROUPS:${panelName}] ${endpoint} returned non-numeric items, skipping`);
       }
     } catch (e) {
       console.log(`[GROUPS:${panelName}] API ${endpoint} failed:`, e.message);
