@@ -190,59 +190,71 @@ async function autoDeliverOrder(orderId, ctx) {
   const expireUnix = Math.floor(Date.now() / 1000) + order.validity * 86400;
   const panelUsername = `fastxline_${Math.floor(1000 + Math.random() * 9000)}`;
 
+  // Try delivery with group IDs, then fallback to default, then fallback to no groups
+  let attempt = 0;
+  const maxAttempts = 3;
+  let created = null;
+  let subUrl = null;
+
   try {
-    // Discover group IDs for this panel
-    const panelGroupIds = await discoverGroupIds(panel);
+    while (attempt < maxAttempts) {
+      try {
+        // Discover group IDs for this panel (only on first attempt)
+        let panelGroupIds = [];
+        if (attempt === 0) {
+          panelGroupIds = await discoverGroupIds(panel);
+        } else if (attempt === 1) {
+          // Second attempt: use default [1, 2]
+          panelGroupIds = [1, 2];
+          // Clear cache so next time it re-discovers
+          delete discoveredGroupIdsCache[panel];
+        } else {
+          // Third attempt: no group_ids
+          panelGroupIds = [];
+        }
 
-    // Create user on panel
-    const created = await panelApi(panel, 'POST', '/user', {
-      username: panelUsername,
-      data_limit: dataLimitBytes,
-      expire: expireUnix,
-      note: `Order #${orderId} | User: ${order.user_id}`,
-      group_ids: panelGroupIds.length > 0 ? panelGroupIds : [1, 2],
-    });
+        // Create user on panel
+        const userPayload = {
+          username: panelUsername,
+          data_limit: dataLimitBytes,
+          expire: expireUnix,
+          note: `Order #${orderId} | User: ${order.user_id}`,
+        };
+        if (panelGroupIds.length > 0) {
+          userPayload.group_ids = panelGroupIds;
+        }
 
-    if (!created || !created.username) {
-      throw new Error('Panel user creation failed: ' + JSON.stringify(created));
+        const created = await panelApi(panel, 'POST', '/user', userPayload);
+
+        if (!created || !created.username) {
+          throw new Error('Panel user creation failed: ' + JSON.stringify(created));
+        }
+
+        subUrl = created.subscription_url.startsWith('http')
+          ? created.subscription_url
+          : 'https://' + new URL(creds.url).host + created.subscription_url;
+
+        // Success - exit retry loop
+        break;
+      } catch (err) {
+        attempt++;
+        const errMsg = err.message || '';
+        console.error(`[AUTO_DELIVER] Attempt ${attempt}/${maxAttempts} failed for order ${orderId}:`, errMsg);
+
+        // If "Group not found" error, clear cache and retry
+        if (errMsg.includes('Group not found') || errMsg.includes('group')) {
+          delete discoveredGroupIdsCache[panel];
+          if (attempt < maxAttempts) {
+            console.log(`[AUTO_DELIVER] Retrying without group_ids...`);
+            continue;
+          }
+        }
+
+        if (attempt >= maxAttempts) {
+          throw err;
+        }
+      }
     }
-
-    const subUrl = created.subscription_url.startsWith('http')
-      ? created.subscription_url
-      : 'https://' + new URL(creds.url).host + created.subscription_url;
-
-    // Generate QR via API
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(subUrl)}`;
-
-    // Save to DB
-    db.prepare("UPDATE orders SET status = 'delivered', sub_link = ?, panel_username = ? WHERE id = ?")
-      .run(subUrl, panelUsername, orderId);
-
-    // Send to user
-    const expireDate = new Date(expireUnix * 1000).toLocaleDateString('fa-IR');
-    const msg = 
-      `✅ *سفارش شما تحویل داده شد!*\n\n` +
-      `🔹 *سرویس:* ${escapeMarkdown(order.plan_name)}\n` +
-      `🗜 *حجم:* ${order.plan_gb} گیگابایت\n` +
-      `⏳ *مدت زمان:* ${order.validity} روز (تا ${expireDate})\n\n` +
-      `🔗 *لینک اتصال:*\n\`${subUrl}\`\n\n` +
-      `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
-
-    await ctx.replyWithPhoto(qrUrl, {
-      caption: msg,
-      parse_mode: 'Markdown',
-      ...Markup.inlineKeyboard([[b('سرویس‌های من 📦', 'my_services', 'myServices')]]),
-    });
-
-    // Notify admin
-    bot.telegram.sendMessage(ADMIN_ID,
-      `✅ سفارش #${orderId} به صورت اتوماتیک تحویل داده شد\n` +
-      `👤 @${ctx.from.username || 'ندارد'} (${ctx.from.id})\n` +
-      `🔹 ${order.plan_name} | ${order.plan_gb}GB | ${order.validity} روز`,
-      { parse_mode: 'Markdown' }
-    ).catch(() => {});
-
-    return true;
   } catch (err) {
     console.error('Auto-deliver error:', err.message);
     bot.telegram.sendMessage(ADMIN_ID,
@@ -251,6 +263,39 @@ async function autoDeliverOrder(orderId, ctx) {
     ).catch(() => {});
     return false;
   }
+
+  // Generate QR via API
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(subUrl)}`;
+
+  // Save to DB
+  db.prepare("UPDATE orders SET status = 'delivered', sub_link = ?, panel_username = ? WHERE id = ?")
+    .run(subUrl, panelUsername, orderId);
+
+  // Send to user
+  const expireDate = new Date(expireUnix * 1000).toLocaleDateString('fa-IR');
+  const msg =
+    `✅ *سفارش شما تحویل داده شد!*\n\n` +
+    `🔹 *سرویس:* ${escapeMarkdown(order.plan_name)}\n` +
+    `🗜 *حجم:* ${order.plan_gb} گیگابایت\n` +
+    `⏳ *مدت زمان:* ${order.validity} روز (تا ${expireDate})\n\n` +
+    `🔗 *لینک اتصال:*\n\`${subUrl}\`\n\n` +
+    `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
+
+  await ctx.replyWithPhoto(qrUrl, {
+    caption: msg,
+    parse_mode: 'Markdown',
+    ...Markup.inlineKeyboard([[b('سرویس‌های من 📦', 'my_services', 'myServices')]]),
+  });
+
+  // Notify admin
+  bot.telegram.sendMessage(ADMIN_ID,
+    `✅ سفارش #${orderId} به صورت اتوماتیک تحویل داده شد\n` +
+    `👤 @${ctx.from.username || 'ندارد'} (${ctx.from.id})\n` +
+    `🔹 ${order.plan_name} | ${order.plan_gb}GB | ${order.validity} روز`,
+    { parse_mode: 'Markdown' }
+  ).catch(() => {});
+
+  return true;
 }
 // Per-panel group IDs cache: { panelName: groupIds[] }
 const discoveredGroupIdsCache = {};
@@ -1346,29 +1391,64 @@ bot.action('free_test', async (ctx) => {
     const expireUnix = Math.floor(Date.now() / 1000) + 86400; // +24h
     const dataLimitBytes = 100 * 1024 * 1024; // 100 MB
 
-    // Discover group IDs for this panel
-    const panelGroupIds = await discoverGroupIds(panelName);
+    // Try with retry logic for group_ids
+    let attempt = 0;
+    const maxAttempts = 3;
+    let created = null;
+    let subUrl = null;
 
-    // === Create user with ALL groups selected ===
-    // group_ids: [1, 2] selects both "Exclusive" and "Standard" groups
-    const userPayload = {
-      username: panelUsername,
-      data_limit: dataLimitBytes,
-      expire: expireUnix,
-      note: 'Free trial from bot | User: ' + ctx.from.id,
-      group_ids: panelGroupIds.length > 0 ? panelGroupIds : [1, 2],  // Auto-discovered groups
-    };
+    while (attempt < maxAttempts) {
+      try {
+        let panelGroupIds = [];
+        if (attempt === 0) {
+          panelGroupIds = await discoverGroupIds(panelName);
+        } else if (attempt === 1) {
+          panelGroupIds = [1, 2];
+          delete discoveredGroupIdsCache[panelName];
+        } else {
+          panelGroupIds = [];
+        }
 
-    const created = await panelApi(panelName, 'POST', '/user', userPayload);
+        const userPayload = {
+          username: panelUsername,
+          data_limit: dataLimitBytes,
+          expire: expireUnix,
+          note: 'Free trial from bot | User: ' + ctx.from.id,
+        };
+        if (panelGroupIds.length > 0) {
+          userPayload.group_ids = panelGroupIds;
+        }
 
-    if (!created || !created.username) {
-      db.prepare('UPDATE users SET used_free_test = 0 WHERE user_id = ?').run(ctx.from.id);
-      throw new Error(JSON.stringify(created));
+        created = await panelApi(panelName, 'POST', '/user', userPayload);
+
+        if (!created || !created.username) {
+          throw new Error('Panel user creation failed: ' + JSON.stringify(created));
+        }
+
+        subUrl = created.subscription_url.startsWith('http')
+          ? created.subscription_url
+          : 'https://' + new URL(creds.url).host + created.subscription_url;
+
+        break; // Success
+      } catch (err) {
+        attempt++;
+        const errMsg = err.message || '';
+        console.error(`[FREE_TRIAL] Attempt ${attempt}/${maxAttempts} failed:`, errMsg);
+
+        if (errMsg.includes('Group not found') || errMsg.includes('group')) {
+          delete discoveredGroupIdsCache[panelName];
+          if (attempt < maxAttempts) {
+            console.log(`[FREE_TRIAL] Retrying without group_ids...`);
+            continue;
+          }
+        }
+
+        if (attempt >= maxAttempts) {
+          db.prepare('UPDATE users SET used_free_test = 0 WHERE user_id = ?').run(ctx.from.id);
+          throw err;
+        }
+      }
     }
-
-    const subUrl = created.subscription_url.startsWith('http')
-      ? created.subscription_url
-      : 'https://' + new URL(creds.url).host + created.subscription_url;
     let expireDate = '';
     if (created.expire) {
       const d = new Date(created.expire);
