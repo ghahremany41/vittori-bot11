@@ -3798,6 +3798,9 @@ bot.action(/^admin_panel_detail_(\d+)$/, async (ctx) => {
       Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
     ],
     [
+      Markup.button.callback('🧪 تست اتصال', `admin_test_panel_${panel.id}`),
+    ],
+    [
       Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
       Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
     ],
@@ -3863,6 +3866,51 @@ bot.action(/^admin_edit_panel_password_(\d+)$/, async (ctx) => {
   if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
   adminState[ADMIN_ID] = { action: 'edit_panel_password', panelId };
   ctx.reply(`🔒 پسورد فعلی: ********\n\nپسورد جدید را وارد کنید:\n(یا "رد کردن" برای پاک کردن و استفاده از تنظیمات سراسری)`, Markup.inlineKeyboard([[b('لغو', `admin_panel_detail_${panelId}`, 'back')]]));
+});
+
+bot.action(/^admin_test_panel_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panelId = Number(ctx.match[1]);
+  const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(panelId);
+  if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
+
+  await ctx.editMessageText(`🧪 در حال تست اتصال پنل ${panel.display_name}...`);
+
+  try {
+    // Clear cache for this panel
+    panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
+
+    const token = await getPanelToken(panel.name);
+    const users = await panelApi(panel.name, 'GET', '/user?limit=1');
+    const userCount = users.total || (Array.isArray(users) ? users.length : '?');
+
+    // Get the detected API path for this panel
+    const cache = panelTokenCache[panel.name];
+    const apiPath = cache?.detectedApiPath || 'نامشخص';
+
+    // Also test group discovery
+    const groupIds = await discoverGroupIds(panel.name);
+
+    await ctx.reply(
+      `✅ اتصال برقرار!\n\n` +
+      `🔗 پنل: ${panel.display_name} (${panel.name})\n` +
+      `🌐 URL: ${panel.url || '--- (سراسری)'}\n` +
+      `👤 Username: ${panel.username || '--- (سراسری)'}\n` +
+      `📡 مسیر API: ${apiPath}\n` +
+      `👥 کاربران: ${userCount}\n` +
+      `📦 گروه‌ها: ${groupIds.length > 0 ? groupIds.join(', ') : 'پیش‌فرض/همه'}`,
+      Markup.inlineKeyboard([[b('بازگشت ◀️', `admin_panel_detail_${panelId}`, 'back')]])
+    );
+  } catch (err) {
+    await ctx.reply(
+      `❌ خطا در اتصال پنل ${panel.display_name}:\n\n` +
+      `🔗 ${panel.url || '---'}\n` +
+      `👤 ${panel.username || '---'}\n\n` +
+      `خطا: ${err.message}`,
+      Markup.inlineKeyboard([[b('بازگشت ◀️', `admin_panel_detail_${panelId}`, 'back')]])
+    );
+  }
 });
 
 bot.action(/^admin_toggle_panel_(\d+)$/, async (ctx) => {
