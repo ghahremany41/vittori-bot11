@@ -489,6 +489,7 @@ try { db.exec(`ALTER TABLE orders ADD COLUMN sub_link TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE panels ADD COLUMN url TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE panels ADD COLUMN username TEXT`); } catch (_) {}
 try { db.exec(`ALTER TABLE panels ADD COLUMN password TEXT`); } catch (_) {}
+try { db.exec(`ALTER TABLE panels ADD COLUMN group_ids TEXT`); } catch (_) {}
 
 db.prepare("UPDATE plans SET panel = 'pasarguard' WHERE panel = 'pasargad'").run();
 db.prepare("UPDATE orders SET panel = 'pasarguard' WHERE panel = 'pasargad'").run();
