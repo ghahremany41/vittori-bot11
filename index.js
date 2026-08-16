@@ -209,68 +209,32 @@ async function autoDeliverOrder(orderId, ctx) {
   let subUrl = null;
 
   try {
-    while (attempt < maxAttempts) {
-      try {
-        // Discover group IDs for this panel (only on first attempt)
-        let panelGroupIds = [];
-        if (attempt === 0) {
-          panelGroupIds = await discoverGroupIds(panel);
-        } else if (attempt === 1) {
-          // Second attempt: use default [1, 2]
-          panelGroupIds = [1, 2];
-          // Clear cache so next time it re-discovers
-          delete discoveredGroupIdsCache[panel];
-        } else {
-          // Third attempt: no group_ids (panel will use defaults/all)
-          panelGroupIds = [];
-        }
+    // Discover group IDs for this panel
+    const discoveredGroups = await discoverGroupIds(panel);
 
-        // Create user on panel
-        // Try to select all groups by passing all discovered group IDs
-        // If no groups discovered, omit group_ids to let panel use default/all
-        const userPayload = {
-          username: panelUsername,
-          data_limit: dataLimitBytes,
-          expire: expireUnix,
-          note: `Order #${orderId} | User: ${order.user_id}`,
-        };
-        // Pass all discovered group IDs to select all available groups
-        // If empty, panel typically defaults to all groups
-        if (panelGroupIds.length > 0) {
-          userPayload.group_ids = panelGroupIds;
-        }
-
-        const created = await panelApi(panel, 'POST', '/user', userPayload);
-
-        if (!created || !created.username) {
-          throw new Error('Panel user creation failed: ' + JSON.stringify(created));
-        }
-
-        subUrl = created.subscription_url.startsWith('http')
-          ? created.subscription_url
-          : 'https://' + new URL(creds.url).host + created.subscription_url;
-
-        // Success - exit retry loop
-        break;
-      } catch (err) {
-        attempt++;
-        const errMsg = err.message || '';
-        console.error(`[AUTO_DELIVER] Attempt ${attempt}/${maxAttempts} failed for order ${orderId}:`, errMsg);
-
-        // If "Group not found" error, clear cache and retry
-        if (errMsg.includes('Group not found') || errMsg.includes('group')) {
-          delete discoveredGroupIdsCache[panel];
-          if (attempt < maxAttempts) {
-            console.log(`[AUTO_DELIVER] Retrying without group_ids...`);
-            continue;
-          }
-        }
-
-        if (attempt >= maxAttempts) {
-          throw err;
-        }
-      }
+    // Build user payload - only include group_ids if we have valid numeric IDs
+    // Sending empty array [] causes "you must select at least one group" error
+    // Sending invalid IDs causes "Group not found" error
+    // Sending nothing lets the panel use default/all groups
+    const userPayload = {
+      username: panelUsername,
+      data_limit: dataLimitBytes,
+      expire: expireUnix,
+      note: `Order #${orderId} | User: ${order.user_id}`,
+    };
+    if (discoveredGroups.length > 0) {
+      userPayload.group_ids = discoveredGroups;
     }
+
+    const created = await panelApi(panel, 'POST', '/user', userPayload);
+
+    if (!created || !created.username) {
+      throw new Error('Panel user creation failed: ' + JSON.stringify(created));
+    }
+
+    subUrl = created.subscription_url.startsWith('http')
+      ? created.subscription_url
+      : 'https://' + new URL(creds.url).host + created.subscription_url;
   } catch (err) {
     console.error('Auto-deliver error:', err.message);
     bot.telegram.sendMessage(ADMIN_ID,
@@ -1418,67 +1382,30 @@ bot.action('free_test', async (ctx) => {
     const expireUnix = Math.floor(Date.now() / 1000) + 86400; // +24h
     const dataLimitBytes = 100 * 1024 * 1024; // 100 MB
 
-    // Try with retry logic for group_ids
-    let attempt = 0;
-    const maxAttempts = 3;
-    let created = null;
-    let subUrl = null;
+    // Discover group IDs for this panel
+    const discoveredGroups = await discoverGroupIds(panelName);
 
-    while (attempt < maxAttempts) {
-      try {
-        let panelGroupIds = [];
-        if (attempt === 0) {
-          panelGroupIds = await discoverGroupIds(panelName);
-        } else if (attempt === 1) {
-          panelGroupIds = [1, 2];
-          delete discoveredGroupIdsCache[panelName];
-        } else {
-          // Third attempt: no group_ids (panel will use defaults/all)
-          panelGroupIds = [];
-        }
-
-        const userPayload = {
-          username: panelUsername,
-          data_limit: dataLimitBytes,
-          expire: expireUnix,
-          note: 'Free trial from bot | User: ' + ctx.from.id,
-        };
-        // Pass all discovered group IDs to select all available groups
-        // If empty, panel typically defaults to all groups
-        if (panelGroupIds.length > 0) {
-          userPayload.group_ids = panelGroupIds;
-        }
-
-        created = await panelApi(panelName, 'POST', '/user', userPayload);
-
-        if (!created || !created.username) {
-          throw new Error('Panel user creation failed: ' + JSON.stringify(created));
-        }
-
-        subUrl = created.subscription_url.startsWith('http')
-          ? created.subscription_url
-          : 'https://' + new URL(creds.url).host + created.subscription_url;
-
-        break; // Success
-      } catch (err) {
-        attempt++;
-        const errMsg = err.message || '';
-        console.error(`[FREE_TRIAL] Attempt ${attempt}/${maxAttempts} failed:`, errMsg);
-
-        if (errMsg.includes('Group not found') || errMsg.includes('group')) {
-          delete discoveredGroupIdsCache[panelName];
-          if (attempt < maxAttempts) {
-            console.log(`[FREE_TRIAL] Retrying without group_ids...`);
-            continue;
-          }
-        }
-
-        if (attempt >= maxAttempts) {
-          db.prepare('UPDATE users SET used_free_test = 0 WHERE user_id = ?').run(ctx.from.id);
-          throw err;
-        }
-      }
+    // Build payload - only include group_ids if we have valid numeric IDs
+    const userPayload = {
+      username: panelUsername,
+      data_limit: dataLimitBytes,
+      expire: expireUnix,
+      note: 'Free trial from bot | User: ' + ctx.from.id,
+    };
+    if (discoveredGroups.length > 0) {
+      userPayload.group_ids = discoveredGroups;
     }
+
+    created = await panelApi(panelName, 'POST', '/user', userPayload);
+
+    if (!created || !created.username) {
+      db.prepare('UPDATE users SET used_free_test = 0 WHERE user_id = ?').run(ctx.from.id);
+      throw new Error('Panel user creation failed: ' + JSON.stringify(created));
+    }
+
+    subUrl = created.subscription_url.startsWith('http')
+      ? created.subscription_url
+      : 'https://' + new URL(creds.url).host + created.subscription_url;
     let expireDate = '';
     if (created.expire) {
       const d = new Date(created.expire);
