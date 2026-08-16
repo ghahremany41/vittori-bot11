@@ -322,23 +322,30 @@ async function discoverGroupIds(panelName) {
     return discoveredGroupIdsCache[panelName];
   }
 
-  // 1. First try /groups endpoint
-  try {
-    const groups = await panelApi(panelName, 'GET', '/groups');
-    if (Array.isArray(groups) && groups.length > 0) {
-      const groupIds = groups.map(g => g.id || g).filter(id => typeof id === 'number');
-      if (groupIds.length > 0) {
-        discoveredGroupIdsCache[panelName] = groupIds;
-        console.log(`[GROUPS:${panelName}] Discovered from API:`, groupIds);
-        // Save to DB for future use (per panel)
-        try {
-          db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(`group_ids_${panelName}`, JSON.stringify(groupIds));
-        } catch (_) {}
-        return groupIds;
+  // Try multiple endpoints for group discovery
+  const groupEndpoints = ['/groups', '/api/groups', '/api/admin/groups', '/api/inbounds', '/xui/groups', '/panel/groups'];
+
+  for (const endpoint of groupEndpoints) {
+    try {
+      const groups = await panelApi(panelName, 'GET', endpoint);
+      if (Array.isArray(groups) && groups.length > 0) {
+        // For /api/inbounds, groups are inbound names, extract IDs if available
+        const groupIds = groups.map(g => g.id || g.inbound_id || g).filter(id => typeof id === 'number' || typeof id === 'string');
+        if (groupIds.length > 0) {
+          // If we got strings (names), use them as-is for the panel
+          // Panel APIs typically accept either IDs or names
+          discoveredGroupIdsCache[panelName] = groupIds;
+          console.log(`[GROUPS:${panelName}] Discovered from ${endpoint}:`, groupIds);
+          // Save to DB for future use (per panel)
+          try {
+            db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(`group_ids_${panelName}`, JSON.stringify(groupIds));
+          } catch (_) {}
+          return groupIds;
+        }
       }
+    } catch (e) {
+      console.log(`[GROUPS:${panelName}] API ${endpoint} failed:`, e.message);
     }
-  } catch (e) {
-    console.log(`[GROUPS:${panelName}] API /api/groups failed:`, e.message);
   }
 
   // 2. Try to get from DB settings (saved from previous successful discovery)
