@@ -54,14 +54,13 @@ function getPanelToken(panelName) {
 
     let pathIndex = 0;
 
-    const tryPath = (useJson) => {
+    const tryPath = () => {
       if (pathIndex >= apiPaths.length) {
         return reject(new Error(`مسیر API برای پنل ${panelName} پیدا نشد. آدرس پنل را بررسی کنید.`));
       }
 
       const apiPath = apiPaths[pathIndex];
-      // Always use form-urlencoded first (more compatible with different panel types)
-      // Only use JSON if explicitly needed
+      // Always use form-urlencoded (most compatible with all panel types)
       const data = `grant_type=&username=${creds.username}&password=${encodeURIComponent(creds.password)}`;
 
       const options = {
@@ -89,44 +88,30 @@ function getPanelToken(panelName) {
               cache.detectedApiPath = apiPath; // Cache the working path
               console.log(`[PANEL:${panelName}] API path detected: ${apiPath}`);
               resolve(cache.token);
-            } else if (useJson) {
-              tryPath(false); // Try form-urlencoded
             } else {
               pathIndex++;
-              tryPath(true); // Try next path
+              tryPath();
             }
           } catch (e) {
-            if (useJson) {
-              tryPath(false);
-            } else {
-              pathIndex++;
-              tryPath(true);
-            }
+            pathIndex++;
+            tryPath();
           }
         });
       });
       req.on('error', (e) => {
-        if (useJson) {
-          tryPath(false);
-        } else {
-          pathIndex++;
-          tryPath(true);
-        }
+        pathIndex++;
+        tryPath();
       });
       req.on('timeout', () => {
         req.destroy();
-        if (useJson) {
-          tryPath(false);
-        } else {
-          pathIndex++;
-          tryPath(true);
-        }
+        pathIndex++;
+        tryPath();
       });
       req.write(data);
       req.end();
     };
 
-    tryPath(true);
+    tryPath();
   });
 }
 
