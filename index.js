@@ -202,10 +202,6 @@ async function autoDeliverOrder(orderId, ctx) {
   const expireUnix = Math.floor(Date.now() / 1000) + order.validity * 86400;
   const panelUsername = `fastxline_${Math.floor(1000 + Math.random() * 9000)}`;
 
-  // Try delivery with group IDs, then fallback to default, then fallback to no groups
-  let attempt = 0;
-  const maxAttempts = 3;
-  let created = null;
   let subUrl = null;
 
   try {
