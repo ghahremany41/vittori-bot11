@@ -3832,8 +3832,19 @@ bot.action(/^admin_test_panel_(\d+)$/, async (ctx) => {
     panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
 
     const token = await getPanelToken(panel.name);
-    const users = await panelApi(panel.name, 'GET', '/user?limit=1');
-    const userCount = users.total || (Array.isArray(users) ? users.length : '?');
+
+    // Try different user listing endpoints (some panels use /api/users, others /api/user)
+    let userCount = '?';
+    try {
+      const users = await panelApi(panel.name, 'GET', '/users');
+      if (users && users.users) userCount = users.users.length;
+      else if (Array.isArray(users)) userCount = users.length;
+    } catch (_) {
+      try {
+        const users = await panelApi(panel.name, 'GET', '/user?limit=1');
+        userCount = users.total || '?';
+      } catch (_) {}
+    }
 
     // Get the detected API path for this panel
     const cache = panelTokenCache[panel.name];
@@ -4653,8 +4664,19 @@ bot.action('admin_quick_test', async (ctx) => {
     panelTokenCache[panelName] = { token: null, expiry: 0, detectedApiPath: null };
 
     const token = await getPanelToken(panelName);
-    const users = await panelApi(panelName, 'GET', '/user?limit=1');
-    const userCount = users.total || (Array.isArray(users) ? users.length : '?');
+
+    // Try different user listing endpoints
+    let userCount = '?';
+    try {
+      const users = await panelApi(panelName, 'GET', '/users');
+      if (users && users.users) userCount = users.users.length;
+      else if (Array.isArray(users)) userCount = users.length;
+    } catch (_) {
+      try {
+        const users = await panelApi(panelName, 'GET', '/user?limit=1');
+        userCount = users.total || '?';
+      } catch (_) {}
+    }
 
     // Get the detected API path for this panel
     const cache = panelTokenCache[panelName];
