@@ -790,8 +790,10 @@ function getPanelCredentials(panelName) {
         manualGroupIds = JSON.parse(panel.group_ids);
       } catch (_) {}
     }
+    // Clean URL - remove trailing /dashboard or /api
+    let cleanUrl = panel.url.replace(/\/+$/, '').replace(/\/dashboard$/, '').replace(/\/api$/, '');
     return {
-      url: panel.url,
+      url: cleanUrl,
       username: panel.username,
       password: panel.password,
       groupIds: manualGroupIds
