@@ -60,9 +60,9 @@ function getPanelToken(panelName) {
       }
 
       const apiPath = apiPaths[pathIndex];
-      const data = useJson
-        ? JSON.stringify({ username: creds.username, password: creds.password })
-        : `grant_type=&username=${creds.username}&password=${encodeURIComponent(creds.password)}`;
+      // Always use form-urlencoded first (more compatible with different panel types)
+      // Only use JSON if explicitly needed
+      const data = `grant_type=&username=${creds.username}&password=${encodeURIComponent(creds.password)}`;
 
       const options = {
         hostname: hostname,
@@ -70,7 +70,7 @@ function getPanelToken(panelName) {
         path: apiPath,
         method: 'POST',
         headers: {
-          'Content-Type': useJson ? 'application/json' : 'application/x-www-form-urlencoded',
+          'Content-Type': 'application/x-www-form-urlencoded',
           'Accept': 'application/json',
         },
         rejectUnauthorized: false,
