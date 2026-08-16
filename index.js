@@ -1433,7 +1433,7 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
   safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
-bot.action(/^plan_(\d+)_(pasarguard|economic|[\w]+)(_2m)?$/, (ctx) => {
+bot.action(/^plan_(\d+)_(.+?)(_2m)?$/, (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
   const gb = Number(ctx.match[1]);
@@ -1461,7 +1461,7 @@ bot.action(/^plan_(\d+)_(pasarguard|economic|[\w]+)(_2m)?$/, (ctx) => {
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
-bot.action(/^discount_apply_(\d+)_(pasarguard|economic)$/, (ctx) => {
+bot.action(/^discount_apply_(\d+)_(.+)$/, (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
   const gb = Number(ctx.match[1]);
@@ -1473,7 +1473,7 @@ bot.action(/^discount_apply_(\d+)_(pasarguard|economic)$/, (ctx) => {
   });
 });
 
-bot.action(/^pay_(\d+)_(pasarguard|economic)(_2m)?$/, async (ctx) => {
+bot.action(/^pay_(\d+)_(.+?)(_2m)?$/, async (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
   const gb = Number(ctx.match[1]);
@@ -1520,7 +1520,7 @@ bot.action(/^pay_(\d+)_(pasarguard|economic)(_2m)?$/, async (ctx) => {
 });
 
 // Pay with discount code
-bot.action(/^pay_discount_(\d+)_(pasarguard|economic)_(.+)$/, async (ctx) => {
+bot.action(/^pay_discount_(\d+)_(.+?)_(.+)$/, async (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
   const gb = Number(ctx.match[1]);
@@ -3928,7 +3928,7 @@ bot.action(/^admin_plans_([\w]+)$/, (ctx) => {
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
-bot.action(/^admin_plan_add_(pasarguard|economic|[\w]+)$/, (ctx) => {
+bot.action(/^admin_plan_add_(.+)$/, (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
   const panel = ctx.match[1];
