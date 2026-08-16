@@ -212,18 +212,19 @@ async function autoDeliverOrder(orderId, ctx) {
     // Discover group IDs for this panel
     const discoveredGroups = await discoverGroupIds(panel);
 
-    // Build user payload - only include group_ids if we have valid numeric IDs
-    // Sending empty array [] causes "you must select at least one group" error
-    // Sending invalid IDs causes "Group not found" error
-    // Sending nothing lets the panel use default/all groups
+    // Build user payload
+    // Priority: 1) Manual group_ids from panel settings, 2) Auto-discovered groups, 3) Nothing (default)
     const userPayload = {
       username: panelUsername,
       data_limit: dataLimitBytes,
       expire: expireUnix,
       note: `Order #${orderId} | User: ${order.user_id}`,
     };
-    if (discoveredGroups.length > 0) {
-      userPayload.group_ids = discoveredGroups;
+
+    // Use manual group_ids if set, otherwise use discovered ones
+    const effectiveGroups = creds.groupIds && creds.groupIds.length > 0 ? creds.groupIds : discoveredGroups;
+    if (effectiveGroups.length > 0) {
+      userPayload.group_ids = effectiveGroups;
     }
 
     const created = await panelApi(panel, 'POST', '/user', userPayload);
@@ -786,19 +787,28 @@ function getPanelByName(name) {
 
 // Get panel credentials (with fallback to global env vars)
 function getPanelCredentials(panelName) {
-  const panel = db.prepare('SELECT url, username, password FROM panels WHERE name = ?').get(panelName);
+  const panel = db.prepare('SELECT url, username, password, group_ids FROM panels WHERE name = ?').get(panelName);
   if (panel && panel.url && panel.username && panel.password) {
+    // Parse manual group_ids if set
+    let manualGroupIds = [];
+    if (panel.group_ids) {
+      try {
+        manualGroupIds = JSON.parse(panel.group_ids);
+      } catch (_) {}
+    }
     return {
       url: panel.url,
       username: panel.username,
-      password: panel.password
+      password: panel.password,
+      groupIds: manualGroupIds
     };
   }
   // Fallback to global settings
   return {
     url: PANEL_URL,
     username: PANEL_USERNAME,
-    password: PANEL_PASSWORD
+    password: PANEL_PASSWORD,
+    groupIds: []
   };
 }
 
@@ -1385,15 +1395,16 @@ bot.action('free_test', async (ctx) => {
     // Discover group IDs for this panel
     const discoveredGroups = await discoverGroupIds(panelName);
 
-    // Build payload - only include group_ids if we have valid numeric IDs
+    // Build payload - use manual group_ids if set, otherwise discovered ones
     const userPayload = {
       username: panelUsername,
       data_limit: dataLimitBytes,
       expire: expireUnix,
       note: 'Free trial from bot | User: ' + ctx.from.id,
     };
-    if (discoveredGroups.length > 0) {
-      userPayload.group_ids = discoveredGroups;
+    const effectiveGroups = creds.groupIds && creds.groupIds.length > 0 ? creds.groupIds : discoveredGroups;
+    if (effectiveGroups.length > 0) {
+      userPayload.group_ids = effectiveGroups;
     }
 
     created = await panelApi(panelName, 'POST', '/user', userPayload);
@@ -2076,6 +2087,9 @@ bot.on('text', async (ctx) => {
           Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
         ],
         [
+          Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
+        ],
+        [
           Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
           Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
         ],
@@ -2118,6 +2132,9 @@ bot.on('text', async (ctx) => {
         ],
         [
           Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
         ],
         [
           Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
@@ -2164,6 +2181,9 @@ bot.on('text', async (ctx) => {
           Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
         ],
         [
+          Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
+        ],
+        [
           Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
           Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
         ],
@@ -2206,6 +2226,67 @@ bot.on('text', async (ctx) => {
         ],
         [
           Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
+        ],
+        [
+          Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
+          Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
+        ],
+        [b('بازگشت ◀️', 'admin_panels', 'back')],
+      ];
+      return ctx.reply(text3, Markup.inlineKeyboard(buttons));
+    }
+
+    if (state.action === 'edit_panel_groups') {
+      const input = ctx.message.text.trim();
+      let groupIds;
+      if (input === 'رد کردن' || input === '' || input === 'پاک کن') {
+        groupIds = null;
+      } else {
+        // Parse comma-separated IDs
+        groupIds = input.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n) && n > 0);
+        if (groupIds.length === 0) {
+          return ctx.reply('❌ هیچ ID معتبری وارد نشد. لطفاً اعداد را با کاما جدا کنید (مثال: 1,2,3)');
+        }
+        groupIds = JSON.stringify(groupIds);
+      }
+      db.prepare('UPDATE panels SET group_ids = ? WHERE id = ?').run(groupIds, state.panelId);
+      delete adminState[userId];
+      const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(state.panelId);
+      // Clear token cache for this panel
+      panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
+      ctx.reply(`✅ گروه‌های پنل بروزرسانی شد.`);
+      // Re-show detail
+      const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ? AND active = 1").get(panel.name).c;
+      const totalPlanCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
+      const orderCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE panel = ?").get(panel.name).c;
+      const status = panel.active ? '✅ فعال' : '❌ غیرفعال';
+      let text3 = '🔍 جزئیات پنل\n\n';
+      text3 += `شناسه: #${panel.id}\n`;
+      text3 += `نام: ${panel.name}\n`;
+      text3 += `نام نمایشی: ${panel.display_name}\n`;
+      text3 += `توضیحات: ${panel.description || '---'}\n`;
+      text3 += `وضعیت: ${status}\n`;
+      text3 += `پلن‌های فعال: ${planCount}\n`;
+      text3 += `کل پلن‌ها: ${totalPlanCount}\n`;
+      text3 += `سفارشات: ${orderCount}\n`;
+      text3 += `تاریخ ایجاد: ${panel.created_at}\n`;
+      const buttons = [
+        [
+          Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
+          Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
+          Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+        ],
+        [
+          Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
         ],
         [
           Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
@@ -3734,6 +3815,9 @@ bot.action(/^admin_panel_detail_(\d+)$/, async (ctx) => {
   } else {
     text += `\n🔐 credentials: 🌐 استفاده از تنظیمات سراسری\n`;
   }
+  // Show group_ids
+  const groupIds = panel.group_ids ? JSON.parse(panel.group_ids) : [];
+  text += `\n📦 گروه‌ها: ${groupIds.length > 0 ? groupIds.join(', ') : '--- (خودکار)'}\n`;
 
   const buttons = [
     [
@@ -3746,6 +3830,9 @@ bot.action(/^admin_panel_detail_(\d+)$/, async (ctx) => {
     ],
     [
       Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+    ],
+    [
+      Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
     ],
     [
       Markup.button.callback('🧪 تست اتصال', `admin_test_panel_${panel.id}`),
@@ -3816,6 +3903,24 @@ bot.action(/^admin_edit_panel_password_(\d+)$/, async (ctx) => {
   if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
   adminState[ADMIN_ID] = { action: 'edit_panel_password', panelId };
   ctx.reply(`🔒 پسورد فعلی: ********\n\nپسورد جدید را وارد کنید:\n(یا "رد کردن" برای پاک کردن و استفاده از تنظیمات سراسری)`, Markup.inlineKeyboard([[b('لغو', `admin_panel_detail_${panelId}`, 'back')]]));
+});
+
+bot.action(/^admin_edit_panel_groups_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panelId = Number(ctx.match[1]);
+  const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(panelId);
+  if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.');
+
+  const currentGroups = panel.group_ids ? panel.group_ids : '--- (خودکار)';
+  adminState[ADMIN_ID] = { action: 'edit_panel_groups', panelId };
+  ctx.reply(
+    `📦 گروه‌های فعلی: ${currentGroups}\n\n` +
+    `لیست IDهای گروه را با کاما جدا کنید:\n` +
+    `(مثال: 1,2,3)\n` +
+    `یا "رد کردن" برای پاک کردن و استفاده از خودکار)`,
+    Markup.inlineKeyboard([[b('لغو', `admin_panel_detail_${panelId}`, 'back')]])
+  );
 });
 
 bot.action(/^admin_test_panel_(\d+)$/, async (ctx) => {
