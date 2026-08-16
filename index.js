@@ -22,6 +22,7 @@ const panelTokenCache = {};
 
 function getPanelToken(panelName) {
   const creds = getPanelCredentials(panelName);
+  console.log(`[PANEL:${panelName}] Creds: url=${creds.url}, user=${creds.username}, pass=${creds.password ? creds.password.substring(0,3)+'***' : 'EMPTY'}`);
   const baseUrl = creds.url.replace(/\/+$/, '');
   const hostname = new URL(baseUrl).hostname;
   const port = new URL(baseUrl).port || 443;
@@ -76,6 +77,7 @@ function getPanelToken(panelName) {
         timeout: 10000,
       };
 
+      console.log(`[PANEL:${panelName}] Trying: https://${hostname}:${port}${apiPath}`);
       const req = https.request(options, (res) => {
         let body = '';
         res.on('data', c => body += c);
@@ -86,24 +88,28 @@ function getPanelToken(panelName) {
               cache.token = j.access_token;
               cache.expiry = Date.now() + 3300000;
               cache.detectedApiPath = apiPath; // Cache the working path
-              console.log(`[PANEL:${panelName}] API path detected: ${apiPath}`);
+              console.log(`[PANEL:${panelName}] ✅ API path detected: ${apiPath}`);
               resolve(cache.token);
             } else {
+              console.log(`[PANEL:${panelName}] ❌ ${apiPath}: no token - ${body.substring(0,100)}`);
               pathIndex++;
               tryPath();
             }
           } catch (e) {
+            console.log(`[PANEL:${panelName}] ❌ ${apiPath}: parse error - ${body.substring(0,100)}`);
             pathIndex++;
             tryPath();
           }
         });
       });
       req.on('error', (e) => {
+        console.log(`[PANEL:${panelName}] ❌ ${apiPath}: error - ${e.message}`);
         pathIndex++;
         tryPath();
       });
       req.on('timeout', () => {
         req.destroy();
+        console.log(`[PANEL:${panelName}] ❌ ${apiPath}: timeout`);
         pathIndex++;
         tryPath();
       });
