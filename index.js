@@ -201,7 +201,7 @@ async function autoDeliverOrder(orderId, ctx) {
     const discoveredGroups = await discoverGroupIds(panel);
 
     // Build user payload
-    // Priority: 1) Manual group_ids from panel settings, 2) Auto-discovered groups, 3) Nothing (default)
+    // group_ids: use manual from DB, then discovered, then nothing (panel default)
     const userPayload = {
       username: panelUsername,
       data_limit: dataLimitBytes,
@@ -209,10 +209,15 @@ async function autoDeliverOrder(orderId, ctx) {
       note: `Order #${orderId} | User: ${order.user_id}`,
     };
 
-    // Use manual group_ids if set, otherwise use discovered ones
-    const effectiveGroups = creds.groupIds && creds.groupIds.length > 0 ? creds.groupIds : discoveredGroups;
-    if (effectiveGroups.length > 0) {
-      userPayload.group_ids = effectiveGroups;
+    // Manual group_ids take priority
+    if (creds.groupIds && creds.groupIds.length > 0) {
+      userPayload.group_ids = creds.groupIds;
+      console.log(`[AUTO_DELIVER] Using manual group_ids for ${panel}:`, creds.groupIds);
+    } else if (discoveredGroups.length > 0) {
+      userPayload.group_ids = discoveredGroups;
+      console.log(`[AUTO_DELIVER] Using discovered group_ids for ${panel}:`, discoveredGroups);
+    } else {
+      console.log(`[AUTO_DELIVER] No group_ids for ${panel} - panel will use defaults`);
     }
 
     const created = await panelApi(panel, 'POST', '/user', userPayload);
