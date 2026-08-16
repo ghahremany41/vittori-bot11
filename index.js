@@ -38,7 +38,19 @@ function getPanelToken(panelName) {
     // Common API paths to try
     const apiPaths = cache.detectedApiPath
       ? [cache.detectedApiPath]  // Use cached path first
-      : ['/api/admin/token', '/dashboard/api/admin/token', '/xui/api/admin/token', '/api/v1/admin/token'];
+      : [
+          '/api/admin/token',           // Standard 3x-ui
+          '/dashboard/api/admin/token', // Marzban
+          '/xui/api/admin/token',       // XUI
+          '/api/v1/admin/token',        // API v1
+          '/admin/api/token',           // Alternative
+          '/panel/api/token',           // Panel
+          '/v1/admin/token',            // V1
+          '/api/token',                 // Generic
+          '/api/v1/token',              // V1 token
+          '/api/auth/login',            // Auth login
+          '/login',                     // Simple login
+        ];
 
     let pathIndex = 0;
 
