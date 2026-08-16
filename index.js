@@ -782,18 +782,18 @@ function getPanelByName(name) {
 // Get panel credentials (with fallback to global env vars)
 function getPanelCredentials(panelName) {
   const panel = db.prepare('SELECT * FROM panels WHERE name = ?').get(panelName);
-  console.log(`[CREDS:${panelName}] DB row:`, panel ? `url=${panel.url}, user=${panel.username}, group_ids=${panel.group_ids}` : 'NOT FOUND');
+
+  // Parse group_ids from DB (works even if url/username/password are null)
+  let manualGroupIds = [];
+  if (panel && panel.group_ids) {
+    try {
+      manualGroupIds = JSON.parse(panel.group_ids);
+    } catch (_) {}
+  }
+
   if (panel && panel.url && panel.username && panel.password) {
-    // Parse manual group_ids if set
-    let manualGroupIds = [];
-    if (panel.group_ids) {
-      try {
-        manualGroupIds = JSON.parse(panel.group_ids);
-      } catch (_) {}
-    }
     // Clean URL - remove trailing /dashboard or /api
     let cleanUrl = panel.url.replace(/\/+$/, '').replace(/\/dashboard$/, '').replace(/\/api$/, '');
-    console.log(`[CREDS:${panelName}] Cleaned URL: ${cleanUrl}, groupIds:`, manualGroupIds);
     return {
       url: cleanUrl,
       username: panel.username,
@@ -801,13 +801,12 @@ function getPanelCredentials(panelName) {
       groupIds: manualGroupIds
     };
   }
-  // Fallback to global settings
-  console.log(`[CREDS:${panelName}] Using global fallback`);
+  // Fallback to global settings, but keep DB group_ids if set
   return {
     url: PANEL_URL,
     username: PANEL_USERNAME,
     password: PANEL_PASSWORD,
-    groupIds: []
+    groupIds: manualGroupIds
   };
 }
 
