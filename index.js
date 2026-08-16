@@ -769,7 +769,7 @@ function getPanelByName(name) {
 
 // Get panel credentials (with fallback to global env vars)
 function getPanelCredentials(panelName) {
-  const panel = db.prepare('SELECT url, username, password, group_ids FROM panels WHERE name = ?').get(panelName);
+  const panel = db.prepare('SELECT * FROM panels WHERE name = ?').get(panelName);
   if (panel && panel.url && panel.username && panel.password) {
     // Parse manual group_ids if set
     let manualGroupIds = [];
