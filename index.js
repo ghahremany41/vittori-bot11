@@ -1367,14 +1367,46 @@ bot.action('free_test', async (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
 
-  // Atomic check + lock: mark as used IMMEDIATELY to prevent race condition
+  // Check if user already used free test
   const user = db.prepare('SELECT used_free_test FROM users WHERE user_id = ?').get(ctx.from.id);
   if (!user) return safeEdit(ctx, '❌ خطای سیستمی.', mainMenu());
   if (user.used_free_test === 1) {
-    return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.\nهر کاربر فقط یک بار می‌تواند تست رایگان دریافت کند.', mainMenu());
+    return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.\nهر کاربر فقط یک بار می‌تواند تست رایگان دریافت کنید.', mainMenu());
   }
 
-  // Mark as used BEFORE API call to prevent double-claim race condition
+  // Show panel selection for free trial
+  const panels = getActivePanels();
+  if (panels.length === 0) {
+    return safeEdit(ctx, '❌ هیچ پنلی فعال نیست.', mainMenu());
+  }
+
+  const text =
+    `🎁 *تست رایگان*\n\n` +
+    `پنل مورد نظر را برای دریافت تست رایگان انتخاب کنید:\n\n` +
+    `🔸 حجم: ۱۰۰ مگابایت\n` +
+    `🔸 مدت: ۲۴ ساعت`;
+
+  const buttons = [
+    ...panels.map(p => [b(`🔹 ${p.display_name}`, `free_test_panel_${p.name}`, 'panelSelect')]),
+    [b('بازگشت ◀️', 'back_to_menu', 'back')],
+  ];
+
+  safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+bot.action(/^free_test_panel_(.+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (isBanned(ctx.from.id)) return;
+  const panelName = ctx.match[1];
+
+  // Check if user already used free test
+  const user = db.prepare('SELECT used_free_test FROM users WHERE user_id = ?').get(ctx.from.id);
+  if (!user) return safeEdit(ctx, '❌ خطای سیستمی.', mainMenu());
+  if (user.used_free_test === 1) {
+    return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.', mainMenu());
+  }
+
+  // Mark as used to prevent double-claim
   const lockResult = db.prepare('UPDATE users SET used_free_test = 1 WHERE user_id = ? AND used_free_test = 0').run(ctx.from.id);
   if (lockResult.changes === 0) {
     return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.', mainMenu());
@@ -1383,8 +1415,7 @@ bot.action('free_test', async (ctx) => {
   try {
     await ctx.editMessageText('🔄 در حال ایجاد سرویس تست... لطفاً صبر کنید.');
 
-    // Create user on panel (100MB for 24h)
-    const panelName = 'pasarguard'; // Default panel for free trial
+    // Get panel credentials
     const creds = getPanelCredentials(panelName);
     const panelUsername = 'fastxline_trial_' + Math.floor(1000 + Math.random() * 9000);
     const expireUnix = Math.floor(Date.now() / 1000) + 86400; // +24h
