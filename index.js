@@ -747,7 +747,9 @@ async function deleteMessage(ctx, msg) {
   } catch (_) {}
 }
 
-function b(text, data, colorKey) {
+// Custom emoji helper - use emoji character in text, bot renders it as custom emoji
+// Example: b('🔧 تنظیمات', 'settings', 'settings', '5456140674028019486')
+function b(text, data, colorKey, customEmojiId) {
   const btn = Markup.button.callback(text, data);
   if (buttonStyles && colorKey && buttonColors[colorKey]) {
     btn.style = buttonColors[colorKey];
@@ -1371,111 +1373,93 @@ bot.action('free_test', async (ctx) => {
   const user = db.prepare('SELECT used_free_test FROM users WHERE user_id = ?').get(ctx.from.id);
   if (!user) return safeEdit(ctx, '❌ خطای سیستمی.', mainMenu());
   if (user.used_free_test === 1) {
-    return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.\nهر کاربر فقط یک بار می‌تواند تست رایگان دریافت کنید.', mainMenu());
+    return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.\nهر کاربر فقط یک بار می‌تواند تست رایگان دریافت کند.', mainMenu());
   }
 
-  // Show panel selection for free trial
   const panels = getActivePanels();
   if (panels.length === 0) {
     return safeEdit(ctx, '❌ هیچ پنلی فعال نیست.', mainMenu());
   }
 
-  const text =
-    `🎁 *تست رایگان*\n\n` +
-    `پنل مورد نظر را برای دریافت تست رایگان انتخاب کنید:\n\n` +
-    `🔸 حجم: ۱۰۰ مگابایت\n` +
-    `🔸 مدت: ۲۴ ساعت`;
-
-  const buttons = [
-    ...panels.map(p => [b(`🔹 ${p.display_name}`, `free_test_panel_${p.name}`, 'panelSelect')]),
-    [b('بازگشت ◀️', 'back_to_menu', 'back')],
-  ];
-
-  safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
-});
-
-bot.action(/^free_test_panel_(.+)$/, async (ctx) => {
-  safeAnswer(ctx);
-  if (isBanned(ctx.from.id)) return;
-  const panelName = ctx.match[1];
-
-  // Check if user already used free test
-  const user = db.prepare('SELECT used_free_test FROM users WHERE user_id = ?').get(ctx.from.id);
-  if (!user) return safeEdit(ctx, '❌ خطای سیستمی.', mainMenu());
-  if (user.used_free_test === 1) {
-    return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.', mainMenu());
-  }
-
-  // Mark as used to prevent double-claim
+  // Mark as used IMMEDIATELY to prevent double-claim
   const lockResult = db.prepare('UPDATE users SET used_free_test = 1 WHERE user_id = ? AND used_free_test = 0').run(ctx.from.id);
   if (lockResult.changes === 0) {
     return safeEdit(ctx, '⚠️ شما قبلاً از تست رایگان استفاده کرده‌اید.', mainMenu());
   }
 
   try {
-    await ctx.editMessageText('🔄 در حال ایجاد سرویس تست... لطفاً صبر کنید.');
+    await ctx.editMessageText(`🎁 *تست رایگان*\n\n🔄 در حال ایجاد سرویس تست از ${panels.length} پنل... لطفاً صبر کنید.`);
 
-    // Get panel credentials
-    const creds = getPanelCredentials(panelName);
-    const panelUsername = 'fastxline_trial_' + Math.floor(1000 + Math.random() * 9000);
-    const expireUnix = Math.floor(Date.now() / 1000) + 86400; // +24h
-    const dataLimitBytes = 100 * 1024 * 1024; // 100 MB
+    let successCount = 0;
+    let failCount = 0;
 
-    // Discover group IDs for this panel
-    const discoveredGroups = await discoverGroupIds(panelName);
+    for (const panel of panels) {
+      try {
+        const creds = getPanelCredentials(panel.name);
+        const panelUsername = 'fastxline_trial_' + Math.floor(1000 + Math.random() * 9000);
+        const expireUnix = Math.floor(Date.now() / 1000) + 86400; // +24h
+        const dataLimitBytes = 100 * 1024 * 1024; // 100 MB
 
-    // Build payload - use manual group_ids if set, otherwise discovered ones
-    const userPayload = {
-      username: panelUsername,
-      data_limit: dataLimitBytes,
-      expire: expireUnix,
-      note: 'Free trial from bot | User: ' + ctx.from.id,
-    };
-    const effectiveGroups = creds.groupIds && creds.groupIds.length > 0 ? creds.groupIds : discoveredGroups;
-    if (effectiveGroups.length > 0) {
-      userPayload.group_ids = effectiveGroups;
+        // Discover group IDs for this panel
+        const discoveredGroups = await discoverGroupIds(panel.name);
+
+        // Build payload
+        const userPayload = {
+          username: panelUsername,
+          data_limit: dataLimitBytes,
+          expire: expireUnix,
+          note: 'Free trial from bot | User: ' + ctx.from.id,
+        };
+        const effectiveGroups = creds.groupIds && creds.groupIds.length > 0 ? creds.groupIds : discoveredGroups;
+        if (effectiveGroups.length > 0) {
+          userPayload.group_ids = effectiveGroups;
+        }
+
+        const created = await panelApi(panel.name, 'POST', '/user', userPayload);
+
+        if (!created || !created.username) {
+          throw new Error(JSON.stringify(created));
+        }
+
+        const subUrl = created.subscription_url.startsWith('http')
+          ? created.subscription_url
+          : 'https://' + new URL(creds.url).host + created.subscription_url;
+
+        const expireDate = created.expire ? new Date(created.expire).toLocaleDateString('fa-IR') : '۲۴ ساعت';
+        const volumeMB = Math.round(dataLimitBytes / (1024 * 1024));
+
+        const trialMessage =
+          `🎁 *تست رایگان - ${escapeMarkdown(panel.display_name)}*\n\n` +
+          `⏳ *مدت زمان:* ${expireDate}\n` +
+          `🗜 *حجم سرویس:* ${volumeMB} مگابایت\n\n` +
+          `🔗 *لینک اتصال:*\n\`${subUrl}\`\n\n` +
+          `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
+
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(subUrl)}`;
+
+        await ctx.replyWithPhoto(qrUrl, {
+          caption: trialMessage,
+          parse_mode: 'Markdown',
+        });
+
+        successCount++;
+      } catch (err) {
+        console.error(`Free trial error for ${panel.name}:`, err.message);
+        failCount++;
+      }
     }
 
-    created = await panelApi(panelName, 'POST', '/user', userPayload);
-
-    if (!created || !created.username) {
-      db.prepare('UPDATE users SET used_free_test = 0 WHERE user_id = ?').run(ctx.from.id);
-      throw new Error('Panel user creation failed: ' + JSON.stringify(created));
-    }
-
-    subUrl = created.subscription_url.startsWith('http')
-      ? created.subscription_url
-      : 'https://' + new URL(creds.url).host + created.subscription_url;
-    let expireDate = '';
-    if (created.expire) {
-      const d = new Date(created.expire);
-      expireDate = d.toLocaleDateString('fa-IR');
-    }
-
-    const volumeMB = Math.round(dataLimitBytes / (1024 * 1024));
-
-    const trialMessage =
-      `✅ *سرویس با موفقیت ایجاد شد*\n\n` +
-      `🌿 *نام سرویس:* تست رایگان\n` +
-      `⏳ *مدت زمان:* ${expireDate ? expireDate : '۲۴ ساعت'}\n` +
-      `🗜 *حجم سرویس:* ${volumeMB} مگابایت\n\n` +
-      `🔗 *لینک اتصال:*\n\`${subUrl}\`\n\n` +
-      `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
-
-    // Generate QR code via API
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(subUrl)}`;
-
-    try {
-      await ctx.replyWithPhoto(qrUrl, {
-        caption: trialMessage,
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'back_to_menu', 'back')]]),
-      });
-    } catch (_) {
-      safeEdit(ctx, trialMessage, {
-        parse_mode: 'Markdown',
-        ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'back_to_menu', 'back')]])
-      });
+    // Send final summary
+    if (successCount > 0) {
+      await ctx.reply(
+        `✅ *تست رایگان با موفقیت ایجاد شد!*\n\n` +
+        `🔹 تعداد پنل‌های موفق: ${successCount}\n` +
+        (failCount > 0 ? `🔹 تعداد پنل‌های ناموفق: ${failCount}\n` : '') +
+        `\n💡 لینک‌های اتصال بالا را در کلاینت V2Ray وارد کنید.`,
+        { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'back_to_menu', 'back')]]) }
+      );
+    } else {
+      await ctx.editMessageText('❌ خطا در ایجاد سرویس تست از همه پنل‌ها.\nلطفاً بعداً تلاش کنید یا با پشتیبانی تماس بگیرید.', mainMenu());
     }
 
   } catch (err) {
