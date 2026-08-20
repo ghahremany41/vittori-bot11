@@ -723,6 +723,12 @@ function escapeMarkdown(s) {
   return String(s).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
 }
 
+// Custom emoji helper for HTML format
+// Usage: e('⚡️', '5456140674028019486') returns <tg-emoji emoji-id="5456140674028019486">⚡️</tg-emoji>
+function e(emoji, emojiId) {
+  return `<tg-emoji emoji-id="${emojiId}">${emoji}</tg-emoji>`;
+}
+
 async function safeAnswer(ctx) {
   try { await ctx.answerCbQuery(); } catch (_) {}
 }
