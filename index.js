@@ -287,9 +287,7 @@ async function discoverGroupIds(panelName) {
     try {
       const groups = await panelApi(panelName, 'GET', endpoint);
       if (Array.isArray(groups) && groups.length > 0) {
-        // Only use numeric IDs. Some panels (like this tunnel panel) return string names
-        // from /api/inbounds which are NOT valid group_ids (panel expects integers).
-        // If we only get strings, return empty to let panel use default/all groups.
+        // Try to extract numeric IDs
         const groupIds = groups
           .map(g => g.id || g.inbound_id || (typeof g === 'number' ? g : null))
           .filter(id => typeof id === 'number');
@@ -302,8 +300,18 @@ async function discoverGroupIds(panelName) {
           } catch (_) {}
           return groupIds;
         }
-        // Array has items but no numeric IDs - don't use these as group_ids
-        console.log(`[GROUPS:${panelName}] ${endpoint} returned non-numeric items, skipping`);
+
+        // If we got string items (like inbound names), use sequential integers [1..N]
+        // Panels typically use sequential numeric IDs matching the inbound index
+        if (groups.length > 0) {
+          const autoIds = Array.from({ length: groups.length }, (_, i) => i + 1);
+          discoveredGroupIdsCache[panelName] = autoIds;
+          console.log(`[GROUPS:${panelName}] Auto-mapped ${groups.length} items from ${endpoint} to IDs:`, autoIds);
+          try {
+            db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(`group_ids_${panelName}`, JSON.stringify(autoIds));
+          } catch (_) {}
+          return autoIds;
+        }
       }
     } catch (e) {
       console.log(`[GROUPS:${panelName}] API ${endpoint} failed:`, e.message);
@@ -326,7 +334,6 @@ async function discoverGroupIds(panelName) {
   }
 
   // 3. If panel doesn't support groups or no groups found, use empty array
-  // The bot will fallback to [1, 2] when creating users
   console.log(`[GROUPS:${panelName}] No groups found - will use panel defaults`);
   discoveredGroupIdsCache[panelName] = [];
   return [];
@@ -2012,7 +2019,24 @@ bot.on('text', async (ctx) => {
       db.prepare('INSERT INTO panels (name, display_name, description, url, username, password) VALUES (?, ?, ?, ?, ?, ?)')
         .run(state.name, state.display_name, state.description, state.url, state.username, password);
       delete adminState[userId];
-      ctx.reply(`✅ پنل ${state.display_name} با موفقیت اضافه شد.`);
+
+      // Auto-discover groups for new panel
+      let groupInfo = '';
+      try {
+        // Clear cache for this panel first
+        delete discoveredGroupIdsCache[state.name];
+        const discoveredGroups = await discoverGroupIds(state.name);
+        if (discoveredGroups.length > 0) {
+          db.prepare('UPDATE panels SET group_ids = ? WHERE name = ?').run(JSON.stringify(discoveredGroups), state.name);
+          groupInfo = `\n📦 گروه‌ها: ${discoveredGroups.length} گروه (خودکار انتخاب شد)`;
+        } else {
+          groupInfo = '\n📦 گروه‌ها: همه (پیش‌فرض)';
+        }
+      } catch (e) {
+        groupInfo = '\n📦 گروه‌ها: همه (پیش‌فرض)';
+      }
+
+      ctx.reply(`✅ پنل ${state.display_name} با موفقیت اضافه شد.${groupInfo}`);
       // Re-show panels list
       const panels = getAllPanels();
       let text = '🖥 مدیریت پنل‌ها\n\n';
