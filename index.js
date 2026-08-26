@@ -281,13 +281,12 @@ async function discoverGroupIds(panelName) {
   }
 
   // Try multiple endpoints for group discovery
-  const groupEndpoints = ['/groups', '/api/groups', '/api/admin/groups', '/api/inbounds', '/xui/groups', '/panel/groups'];
+  const groupEndpoints = ['/groups', '/api/groups', '/api/admin/groups', '/xui/groups', '/panel/groups'];
 
   for (const endpoint of groupEndpoints) {
     try {
       const groups = await panelApi(panelName, 'GET', endpoint);
       if (Array.isArray(groups) && groups.length > 0) {
-        // Try to extract numeric IDs
         const groupIds = groups
           .map(g => g.id || g.inbound_id || (typeof g === 'number' ? g : null))
           .filter(id => typeof id === 'number');
@@ -300,25 +299,13 @@ async function discoverGroupIds(panelName) {
           } catch (_) {}
           return groupIds;
         }
-
-        // If we got string items (like inbound names), use sequential integers [1..N]
-        // Panels typically use sequential numeric IDs matching the inbound index
-        if (groups.length > 0) {
-          const autoIds = Array.from({ length: groups.length }, (_, i) => i + 1);
-          discoveredGroupIdsCache[panelName] = autoIds;
-          console.log(`[GROUPS:${panelName}] Auto-mapped ${groups.length} items from ${endpoint} to IDs:`, autoIds);
-          try {
-            db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(`group_ids_${panelName}`, JSON.stringify(autoIds));
-          } catch (_) {}
-          return autoIds;
-        }
       }
     } catch (e) {
       console.log(`[GROUPS:${panelName}] API ${endpoint} failed:`, e.message);
     }
   }
 
-  // 2. Try to get from DB settings (saved from previous successful discovery)
+  // Try to get from DB settings (manual group_ids from admin)
   try {
     const saved = db.prepare("SELECT value FROM settings WHERE key = ?").get(`group_ids_${panelName}`);
     if (saved && saved.value) {
@@ -333,8 +320,8 @@ async function discoverGroupIds(panelName) {
     console.log(`[GROUPS:${panelName}] Failed to load from DB:`, e.message);
   }
 
-  // 3. If panel doesn't support groups or no groups found, use empty array
-  console.log(`[GROUPS:${panelName}] No groups found - will use panel defaults`);
+  // No valid group IDs found - return empty so panel uses all groups by default
+  console.log(`[GROUPS:${panelName}] No valid group IDs found - panel will use all groups`);
   discoveredGroupIdsCache[panelName] = [];
   return [];
 }
