@@ -421,25 +421,7 @@ db.exec(`
   );
 `);
 
-const planCount = db.prepare('SELECT COUNT(*) as c FROM plans').get().c;
-if (planCount === 0) {
-  const insert = db.prepare('INSERT INTO plans (name, gb, validity, price, panel) VALUES (?, ?, ?, ?, ?)');
-  const defaultPlans = [
-    ['10GB', 10, 31, 70000, 'tunnel'],
-    ['20GB', 20, 31, 140000, 'tunnel'],
-    ['30GB', 30, 31, 210000, 'tunnel'],
-    ['50GB', 50, 31, 350000, 'tunnel'],
-    ['100GB', 100, 31, 700000, 'tunnel'],
-  ];
-  const insertMany = db.transaction((plans) => { for (const p of plans) insert.run(...p); });
-  insertMany(defaultPlans);
-}
-
-const panelCount = db.prepare('SELECT COUNT(*) as c FROM panels').get().c;
-if (panelCount === 0) {
-  const insertPanel = db.prepare('INSERT INTO panels (name, display_name, description, url, username, password) VALUES (?, ?, ?, ?, ?, ?)');
-  insertPanel.run('tunnel', 'تونل', 'پنل تونل', PANEL_URL, PANEL_USERNAME, PANEL_PASSWORD);
-}
+// Default plans removed - only add via admin panel
 
 try {
   db.exec(`ALTER TABLE users ADD COLUMN referred_by INTEGER`);
