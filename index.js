@@ -824,7 +824,6 @@ function adminMenu() {
       b(`📢 پیام همگانی`, 'admin_broadcast', 'broadcast'),
     ],
     [b(`${botStatus}`, 'admin_toggle_bot', 'botStatus')],
-    [b('🔄 تغییر پنل', 'admin_quick_panel', 'panels')],
     [b('⚙️ تنظیمات ربات', 'admin_bot_settings', 'settings')],
     [b('🎨 تنظیمات رنگ دکمه‌ها', 'admin_color_settings', 'toggle')],
     [b('💾 بکاپ کامل', 'admin_backup', 'settings')],
