@@ -425,16 +425,11 @@ const planCount = db.prepare('SELECT COUNT(*) as c FROM plans').get().c;
 if (planCount === 0) {
   const insert = db.prepare('INSERT INTO plans (name, gb, validity, price, panel) VALUES (?, ?, ?, ?, ?)');
   const defaultPlans = [
-    ['10GB', 10, 31, 70000, 'pasarguard'],
-    ['20GB', 20, 31, 140000, 'pasarguard'],
-    ['30GB', 30, 31, 210000, 'pasarguard'],
-    ['50GB', 50, 31, 350000, 'pasarguard'],
-    ['100GB', 100, 31, 700000, 'pasarguard'],
-    ['25GB', 25, 31, 160000, 'economic'],
-    ['30GB', 30, 31, 190000, 'economic'],
-    ['35GB', 35, 31, 220000, 'economic'],
-    ['55GB', 55, 31, 370000, 'economic'],
-    ['100GB', 100, 31, 580000, 'economic'],
+    ['10GB', 10, 31, 70000, 'tunnel'],
+    ['20GB', 20, 31, 140000, 'tunnel'],
+    ['30GB', 30, 31, 210000, 'tunnel'],
+    ['50GB', 50, 31, 350000, 'tunnel'],
+    ['100GB', 100, 31, 700000, 'tunnel'],
   ];
   const insertMany = db.transaction((plans) => { for (const p of plans) insert.run(...p); });
   insertMany(defaultPlans);
@@ -443,8 +438,7 @@ if (planCount === 0) {
 const panelCount = db.prepare('SELECT COUNT(*) as c FROM panels').get().c;
 if (panelCount === 0) {
   const insertPanel = db.prepare('INSERT INTO panels (name, display_name, description, url, username, password) VALUES (?, ?, ?, ?, ?, ?)');
-  insertPanel.run('pasarguard', 'Pasarguard', 'پنل Pasarguard - مناسب گیمینگ و ترید', PANEL_URL, PANEL_USERNAME, PANEL_PASSWORD);
-  insertPanel.run('economic', 'اقتصادی', 'پنل اقتصادی - مناسب AI و وب گردی', '', '', '');
+  insertPanel.run('tunnel', 'تونل', 'پنل تونل', PANEL_URL, PANEL_USERNAME, PANEL_PASSWORD);
 }
 
 try {
