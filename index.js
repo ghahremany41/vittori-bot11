@@ -2446,7 +2446,13 @@ bot.on('text', async (ctx) => {
     const message = ctx.message.text.trim();
     delete adminState[userId];
     try {
-      await bot.telegram.sendMessage(targetId, `👤 پشتیبانی:\n\n${message}`, { parse_mode: 'Markdown' });
+      await bot.telegram.sendMessage(targetId, `👤 پشتیبانی:\n\n${message}`, {
+        parse_mode: 'Markdown',
+        ...Markup.inlineKeyboard([
+          [b('💬 پاسخ به پشتیبانی', 'user_reply_support', 'support')],
+          [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
+        ]),
+      });
       ctx.reply(`✅ پاسخ برای کاربر ${targetId} ارسال شد.`);
     } catch (e) {
       ctx.reply(`❌ خطا در ارسال پاسخ: ${e.message}`);
@@ -3327,6 +3333,23 @@ bot.action('support', (ctx) => {
     `👤 پشتیبانی\n\n` +
     `پیام یا عکس خود را ارسال کنید، مستقیماً برای پشتیبانی فرستاده می‌شود.\n\n` +
     `⏰ پاسخگویی در ساعات کاری انجام می‌شود.`;
+
+  safeEdit(ctx, text, {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: 'بازگشت به منوی اصلی ◀️', callback_data: 'back_to_menu', style: buttonStyles ? 'danger' : undefined }],
+      ],
+    },
+  });
+});
+
+// User taps "پاسخ به پشتیبانی" on an admin reply → re-enter support mode
+bot.action('user_reply_support', (ctx) => {
+  safeAnswer(ctx);
+  userState[ctx.from.id] = { action: 'support_mode' };
+  const text =
+    `💬 پاسخ به پشتیبانی\n\n` +
+    `پیام خود را ارسال کنید، مستقیماً برای پشتیبانی فرستاده می‌شود.`;
 
   safeEdit(ctx, text, {
     reply_markup: {
