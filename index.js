@@ -274,15 +274,57 @@ async function autoDeliverOrder(orderId, ctx) {
 // Per-panel group IDs cache: { panelName: groupIds[] }
 const discoveredGroupIdsCache = {};
 
+// === Safe group-id discovery (Marzban-aware) ===
+// Marzban exposes groups via /api/groups, but that needs the "groups.read"
+// permission which the bot's admin role ("administrator(حجمی)") does NOT have
+// (returns 403 "Permission denied: groups.read"). The /api/inbounds endpoint
+// only returns a flat list of inbound *names* (strings), NOT numeric group IDs.
+// So we CANNOT derive group_ids from /api/inbounds — mapping [1..N] there is a
+// bug that produces "Group not found".
+//
+// Instead we PROBE: create a throwaway user with group_ids:[candidate], keep it
+// if it succeeds, delete it if it fails. This empirically finds the real IDs.
+async function probeGroupIds(panelName, maxScan = 30) {
+  try {
+    const tokenData = await getPanelToken(panelName); // ensure a token exists
+    if (!tokenData) return [];
+  } catch (e) {
+    console.log(`[GROUPS:${panelName}] No token for probe:`, e.message);
+    return [];
+  }
+
+  const valid = [];
+  for (let g = 1; g <= maxScan; g++) {
+    const uname = `gprobe_${g}_${Math.floor(Math.random() * 1e6)}`;
+    const expire = Math.floor(Date.now() / 1000) + 86400;
+    let created = null;
+    try {
+      created = await panelApi(panelName, 'POST', '/user', {
+        username: uname,
+        data_limit: 1048576,
+        expire,
+        group_ids: [g],
+      });
+    } catch (e) { /* network/probe error — skip */ }
+
+    if (created && created.username) {
+      valid.push(g);
+      // clean up the throwaway user
+      try { await panelApi(panelName, 'DELETE', `/user/${uname}`); } catch (_) {}
+    }
+  }
+  console.log(`[GROUPS:${panelName}] Probing found valid group_ids:`, valid);
+  return valid;
+}
+
 async function discoverGroupIds(panelName) {
   // Check cache first
   if (discoveredGroupIdsCache[panelName]) {
     return discoveredGroupIdsCache[panelName];
   }
 
-  // Try multiple endpoints for group discovery
+  // 1) Try real group endpoints (works only if the admin role has groups.read)
   const groupEndpoints = ['/groups', '/api/groups', '/api/admin/groups', '/xui/groups', '/panel/groups'];
-
   for (const endpoint of groupEndpoints) {
     try {
       const groups = await panelApi(panelName, 'GET', endpoint);
@@ -290,13 +332,9 @@ async function discoverGroupIds(panelName) {
         const groupIds = groups
           .map(g => g.id || g.inbound_id || (typeof g === 'number' ? g : null))
           .filter(id => typeof id === 'number');
-
         if (groupIds.length > 0) {
           discoveredGroupIdsCache[panelName] = groupIds;
           console.log(`[GROUPS:${panelName}] Discovered from ${endpoint}:`, groupIds);
-          try {
-            db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run(`group_ids_${panelName}`, JSON.stringify(groupIds));
-          } catch (_) {}
           return groupIds;
         }
       }
@@ -305,23 +343,44 @@ async function discoverGroupIds(panelName) {
     }
   }
 
-  // Try to get from DB settings (manual group_ids from admin)
+  // 2) /api/inbounds returns inbound *names* (strings) on Marzban — these are
+  //    NOT group IDs. Do NOT map them to [1..N] (that breaks user creation).
+  //    If we ever hit a panel that returns group objects here, use them:
   try {
-    const saved = db.prepare("SELECT value FROM settings WHERE key = ?").get(`group_ids_${panelName}`);
-    if (saved && saved.value) {
-      const parsed = JSON.parse(saved.value);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        discoveredGroupIdsCache[panelName] = parsed;
-        console.log(`[GROUPS:${panelName}] Loaded from DB settings:`, parsed);
-        return parsed;
+    const inbounds = await panelApi(panelName, 'GET', '/api/inbounds');
+    if (Array.isArray(inbounds) && inbounds.length > 0 && typeof inbounds[0] === 'object' && inbounds[0] !== null) {
+      const ids = inbounds.map(g => g.id || g.inbound_id).filter(id => typeof id === 'number');
+      if (ids.length > 0) {
+        discoveredGroupIdsCache[panelName] = ids;
+        console.log(`[GROUPS:${panelName}] Group IDs from /api/inbounds objects:`, ids);
+        return ids;
       }
     }
   } catch (e) {
-    console.log(`[GROUPS:${panelName}] Failed to load from DB:`, e.message);
+    console.log(`[GROUPS:${panelName}] /api/inbounds failed:`, e.message);
   }
 
-  // No valid group IDs found - return empty so panel uses all groups by default
-  console.log(`[GROUPS:${panelName}] No valid group IDs found - panel will use all groups`);
+  // 3) Probe to empirically find valid group_ids (Marzban-safe).
+  //    Only when the admin hasn't set manual group_ids in the DB.
+  const creds = getPanelCredentials(panelName);
+  if (creds.groupIds && creds.groupIds.length > 0) {
+    console.log(`[GROUPS:${panelName}] Using manual group_ids from DB:`, creds.groupIds);
+    discoveredGroupIdsCache[panelName] = creds.groupIds;
+    return creds.groupIds;
+  }
+
+  const probed = await probeGroupIds(panelName);
+  if (probed.length > 0) {
+    discoveredGroupIdsCache[panelName] = probed;
+    // Persist so we don't re-probe (and create throwaway users) on every restart.
+    if (panel) {
+      try { db.prepare('UPDATE panels SET group_ids = ? WHERE name = ?').run(JSON.stringify(probed), panelName); } catch (_) {}
+    }
+    return probed;
+  }
+
+  // 4) Nothing discoverable → return empty so manual creds.groupIds takes over.
+  console.log(`[GROUPS:${panelName}] No groups discovered; relying on manual group_ids from DB`);
   discoveredGroupIdsCache[panelName] = [];
   return [];
 }
@@ -1731,6 +1790,31 @@ bot.on('photo', async (ctx) => {
     delete userState[ctx.from.id];
     return;
   }
+});
+
+// Admin shortcut: /setgroups <panelName> <id1,id2,...>
+// Sets manual group_ids for a panel (used when auto-discovery can't read groups).
+// Example: /setgroups tunnel 2,3,4,5,6,7
+bot.on('text', async (ctx) => {
+  const userId = ctx.from.id;
+  if (userId !== ADMIN_ID) return; // only admin
+  const m = ctx.message.text.trim().match(/^\/setgroups\s+(\S+)\s+(.+)$/);
+  if (!m) return; // not this command — let other handlers run
+  const panelName = m[1];
+  const ids = m[2].split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0);
+  if (ids.length === 0) {
+    return ctx.reply('❌ فرمت نادرست. مثال:\n/setgroups tunnel 2,3,4,5,6,7');
+  }
+  const panel = db.prepare('SELECT * FROM panels WHERE name = ?').get(panelName);
+  if (!panel) {
+    return ctx.reply(`❌ پنل «${panelName}» یافت نشد. پنل‌های موجود را چک کنید.`);
+  }
+  db.prepare('UPDATE panels SET group_ids = ? WHERE name = ?').run(JSON.stringify(ids), panelName);
+  delete discoveredGroupIdsCache[panelName];
+  // Clear token cache so next call re-reads creds
+  if (panelTokenCache[panelName]) panelTokenCache[panelName] = { token: null, expiry: 0, detectedApiPath: null };
+  ctx.reply(`✅ group_ids پنل «${panelName}» روی [${ids.join(', ')}] ست شد.`);
+  return;
 });
 
 bot.on('text', async (ctx) => {

@@ -1,6 +1,8 @@
 .env
 node_modules/
 bot.db
+bot.db-shm
+bot.db-wal
 logs/
 *.bak
 .hermes/
