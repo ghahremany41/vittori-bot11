@@ -361,14 +361,8 @@ async function discoverGroupIds(panelName) {
   }
 
   // 3) Probe to empirically find valid group_ids (Marzban-safe).
-  //    Only when the admin hasn't set manual group_ids in the DB.
-  const creds = getPanelCredentials(panelName);
-  if (creds.groupIds && creds.groupIds.length > 0) {
-    console.log(`[GROUPS:${panelName}] Using manual group_ids from DB:`, creds.groupIds);
-    discoveredGroupIdsCache[panelName] = creds.groupIds;
-    return creds.groupIds;
-  }
-
+  //    We ALWAYS probe first (it's cheap and authoritative) so a stale/wrong
+  //    manual group_ids in the DB can never cause "Group not found".
   const probed = await probeGroupIds(panelName);
   if (probed.length > 0) {
     discoveredGroupIdsCache[panelName] = probed;
@@ -379,8 +373,16 @@ async function discoverGroupIds(panelName) {
     return probed;
   }
 
-  // 4) Nothing discoverable → return empty so manual creds.groupIds takes over.
-  console.log(`[GROUPS:${panelName}] No groups discovered; relying on manual group_ids from DB`);
+  // 4) Probe failed → fall back to manual group_ids from DB (if any).
+  const creds = getPanelCredentials(panelName);
+  if (creds.groupIds && creds.groupIds.length > 0) {
+    console.log(`[GROUPS:${panelName}] Probe failed; using manual group_ids from DB:`, creds.groupIds);
+    discoveredGroupIdsCache[panelName] = creds.groupIds;
+    return creds.groupIds;
+  }
+
+  // 5) Nothing discoverable and nothing manual → return empty (panel default).
+  console.log(`[GROUPS:${panelName}] No groups discovered and no manual group_ids set`);
   discoveredGroupIdsCache[panelName] = [];
   return [];
 }
