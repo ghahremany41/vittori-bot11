@@ -1795,13 +1795,11 @@ bot.on('photo', async (ctx) => {
 // Admin shortcut: /setgroups <panelName> <id1,id2,...>
 // Sets manual group_ids for a panel (used when auto-discovery can't read groups).
 // Example: /setgroups tunnel 2,3,4,5,6,7
-bot.on('text', async (ctx) => {
+bot.hears(/^\/setgroups\s+(\S+)\s+(.+)$/, async (ctx) => {
   const userId = ctx.from.id;
   if (userId !== ADMIN_ID) return; // only admin
-  const m = ctx.message.text.trim().match(/^\/setgroups\s+(\S+)\s+(.+)$/);
-  if (!m) return; // not this command — let other handlers run
-  const panelName = m[1];
-  const ids = m[2].split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0);
+  const panelName = ctx.match[1];
+  const ids = ctx.match[2].split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n) && n > 0);
   if (ids.length === 0) {
     return ctx.reply('❌ فرمت نادرست. مثال:\n/setgroups tunnel 2,3,4,5,6,7');
   }
@@ -2188,50 +2186,59 @@ bot.on('text', async (ctx) => {
     }
 
     if (state.action === 'edit_panel_url') {
-      const url = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim().replace(/\/+$/, '');
-      db.prepare('UPDATE panels SET url = ? WHERE id = ?').run(url, state.panelId);
-      delete adminState[userId];
-      const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(state.panelId);
-      // Clear token cache for this panel
-      panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
-      ctx.reply(`✅ آدرس پنل بروزرسانی شد.`);
-      // Re-show detail
-      const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ? AND active = 1").get(panel.name).c;
-      const totalPlanCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
-      const orderCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE panel = ?").get(panel.name).c;
-      const status = panel.active ? '✅ فعال' : '❌ غیرفعال';
-      let text3 = '🔍 جزئیات پنل\n\n';
-      text3 += `شناسه: #${panel.id}\n`;
-      text3 += `نام: ${panel.name}\n`;
-      text3 += `نام نمایشی: ${panel.display_name}\n`;
-      text3 += `توضیحات: ${panel.description || '---'}\n`;
-      text3 += `وضعیت: ${status}\n`;
-      text3 += `پلن‌های فعال: ${planCount}\n`;
-      text3 += `کل پلن‌ها: ${totalPlanCount}\n`;
-      text3 += `سفارشات: ${orderCount}\n`;
-      text3 += `تاریخ ایجاد: ${panel.created_at}\n`;
-      const buttons = [
-        [
-          Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
-          Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
-        ],
-        [
-          Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
-          Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
-        ],
-        [
-          Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
-        ],
-        [
-          Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
-        ],
-        [
-          Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
-          Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
-        ],
-        [b('بازگشت ◀️', 'admin_panels', 'back')],
-      ];
-      return ctx.reply(text3, Markup.inlineKeyboard(buttons));
+      try {
+        const url = ctx.message.text === 'رد کردن' ? '' : ctx.message.text.trim().replace(/\/+$/, '');
+        if (!state.panelId) throw new Error('panelId missing in adminState');
+        db.prepare('UPDATE panels SET url = ? WHERE id = ?').run(url, state.panelId);
+        delete adminState[userId];
+        const panel = db.prepare('SELECT * FROM panels WHERE id = ?').get(state.panelId);
+        if (!panel) throw new Error('panel not found after update: ' + state.panelId);
+        // Clear token cache for this panel
+        panelTokenCache[panel.name] = { token: null, expiry: 0, detectedApiPath: null };
+        ctx.reply(`✅ آدرس پنل بروزرسانی شد.`);
+        // Re-show detail
+        const planCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ? AND active = 1").get(panel.name).c;
+        const totalPlanCount = db.prepare("SELECT COUNT(*) as c FROM plans WHERE panel = ?").get(panel.name).c;
+        const orderCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE panel = ?").get(panel.name).c;
+        const status = panel.active ? '✅ فعال' : '❌ غیرفعال';
+        let text3 = '🔍 جزئیات پنل\n\n';
+        text3 += `شناسه: #${panel.id}\n`;
+        text3 += `نام: ${panel.name}\n`;
+        text3 += `نام نمایشی: ${panel.display_name}\n`;
+        text3 += `توضیحات: ${panel.description || '---'}\n`;
+        text3 += `وضعیت: ${status}\n`;
+        text3 += `پلن‌های فعال: ${planCount}\n`;
+        text3 += `کل پلن‌ها: ${totalPlanCount}\n`;
+        text3 += `سفارشات: ${orderCount}\n`;
+        text3 += `تاریخ ایجاد: ${panel.created_at}\n`;
+        const buttons = [
+          [
+            Markup.button.callback('📝 ویرایش نام نمایشی', `admin_edit_panel_display_${panel.id}`),
+            Markup.button.callback('📝 ویرایش توضیحات', `admin_edit_panel_desc_${panel.id}`),
+          ],
+          [
+            Markup.button.callback('🔗 ویرایش URL', `admin_edit_panel_url_${panel.id}`),
+            Markup.button.callback('👤 ویرایش یوزرنیم', `admin_edit_panel_username_${panel.id}`),
+          ],
+          [
+            Markup.button.callback('🔒 ویرایش پسورد', `admin_edit_panel_password_${panel.id}`),
+          ],
+          [
+            Markup.button.callback('📦 ویرایش گروه‌ها (IDs)', `admin_edit_panel_groups_${panel.id}`),
+          ],
+          [
+            Markup.button.callback(`${panel.active ? '❌ غیرفعال' : '✅ فعال'} کردن`, `admin_toggle_panel_${panel.id}`),
+            Markup.button.callback('🗑️ حذف', `admin_delete_panel_${panel.id}`),
+          ],
+          [b('بازگشت ◀️', 'admin_panels', 'back')],
+        ];
+        return ctx.reply(text3, Markup.inlineKeyboard(buttons));
+      } catch (e) {
+        console.error('[EDIT_PANEL_URL] error:', e.message);
+        delete adminState[userId];
+        ctx.reply('❌ خطا در بروزرسانی آدرس پنل: ' + e.message);
+      }
+      return;
     }
 
     if (state.action === 'edit_panel_username') {
