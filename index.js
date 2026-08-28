@@ -855,10 +855,10 @@ function getAllPlans() {
 
 function mainMenu() {
   return Markup.inlineKeyboard([
-    [b('🔐 خرید سرویس', 'buy_sub', 'buy')],
-    [b('🎁 تست رایگان', 'free_test', 'trials')],
-    [b('💰 کیف پول', 'wallet', 'wallet'), b('🛍️ سرویس‌های من', 'my_services', 'myServices')],
-    [b('👥 دعوت دوستان', 'referral', 'referral'), b('👤 پشتیبانی', 'support', 'support')],
+    [b('خرید سرویس 🔐', 'buy_sub', 'buy')],
+    [b('تست رایگان 🎁', 'free_test', 'trials')],
+    [b('کیف پول 💰', 'wallet', 'wallet'), b('سرویس‌های من 🛍️', 'my_services', 'myServices')],
+    [b('دعوت دوستان 👥', 'referral', 'referral'), b('پشتیبانی 👤', 'support', 'support')],
   ]);
 }
 
