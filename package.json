@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "prestart": "cp bot.db /data/bot.db || true",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
