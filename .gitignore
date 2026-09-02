@@ -3,7 +3,11 @@ node_modules/
 bot.db
 bot.db-shm
 bot.db-wal
+bot-backup-*.db
 logs/
 *.bak
 .hermes/
 .stfolder/
+check_braces.js
+check_func.js
+CONVERSATION_HISTORY.md

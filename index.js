@@ -12,9 +12,9 @@ let ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'Amin_qh';
 let CARD_NUMBER = process.env.CARD_NUMBER;
 let CARD_OWNER = process.env.CARD_OWNER;
 let CHANNEL_USERNAME = process.env.CHANNEL_USERNAME || 'fastXline';
-let PANEL_URL = process.env.PANEL_URL || 'https://vip-03.fl-sub.site:2096';
-let PANEL_USERNAME = process.env.PANEL_USERNAME || 'b69_Amin1';
-let PANEL_PASSWORD = process.env.PANEL_PASSWORD || '$iwbf*2V5*LvYC';
+let PANEL_URL = process.env.PANEL_URL;
+let PANEL_USERNAME = process.env.PANEL_USERNAME;
+let PANEL_PASSWORD = process.env.PANEL_PASSWORD;
 
 // Panel API - Multi-panel support
 // Per-panel token cache: { panelName: { token, expiry, detectedApiPath } }
@@ -367,7 +367,7 @@ async function discoverGroupIds(panelName) {
   if (probed.length > 0) {
     discoveredGroupIdsCache[panelName] = probed;
     // Persist so we don't re-probe (and create throwaway users) on every restart.
-    if (panel) {
+    if (panelName) {
       try { db.prepare('UPDATE panels SET group_ids = ? WHERE name = ?').run(JSON.stringify(probed), panelName); } catch (_) {}
     }
     return probed;
@@ -643,8 +643,9 @@ function loadSettings() {
     }
   });
   // Clear cached token so it re-authenticates with potentially new credentials
-  panelToken = null;
-  panelTokenExpiry = 0;
+  Object.keys(panelTokenCache).forEach(key => {
+    panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
+  });
 }
 
 function saveSettings() {
@@ -665,9 +666,10 @@ function saveSettings() {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('PANEL_USERNAME', String(PANEL_USERNAME));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('PANEL_PASSWORD', String(PANEL_PASSWORD));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('group_ids', JSON.stringify(discoveredGroupIds));
-  panelToken = null; // Force new token after panel change
-  detectedApiPath = null; // Clear detected API path
-  // Clear all panel token caches
+  // Clear all panel token caches so they re-authenticate with potentially new credentials
+  Object.keys(panelTokenCache).forEach(key => {
+    panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
+  });
   Object.keys(panelTokenCache).forEach(key => {
     panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
   });
@@ -892,10 +894,6 @@ function adminMenu() {
 }
 
 bot.use(async (ctx, next) => {
-  // DEBUG: Log ALL callback queries
-  if (ctx.updateType === 'callback_query') {
-  }
-
   // Register user IMMEDIATELY on any interaction (before channel check)
   if (ctx.from && ctx.from.id !== ADMIN_ID) {
     ensureUser(ctx);
@@ -4815,9 +4813,6 @@ bot.catch((err, ctx) => {
 // Show ☰ menu button on left of input bar for all users
 bot.telegram.setChatMenuButton({ menu_button: { type: 'commands' } }).catch(() => {});
 
-bot.launch();
-console.log('🤖 Bot is running...');
-
 async function adminQuickPanel(ctx) {
   const panels = getAllPanels();
   let text = `🔄 <b>تغییر پنل VPN (سراسری)</b>\n\n`;
@@ -4883,15 +4878,9 @@ bot.action('admin_quick_test', async (ctx) => {
   if (ctx.from.id !== ADMIN_ID) return;
   try {
     await ctx.editMessageText('🧪 در حال تست اتصال پنل پیش‌فرض...');
-
-    // Test connection for the default panel
     const panelName = 'pasarguard';
-    // Clear cache for this panel
     panelTokenCache[panelName] = { token: null, expiry: 0, detectedApiPath: null };
-
     const token = await getPanelToken(panelName);
-
-    // Try different user listing endpoints
     let userCount = '?';
     try {
       const users = await panelApi(panelName, 'GET', '/users');
@@ -4903,15 +4892,15 @@ bot.action('admin_quick_test', async (ctx) => {
         userCount = users.total || '?';
       } catch (_) {}
     }
-
-    // Get the detected API path for this panel
     const cache = panelTokenCache[panelName];
     const apiPath = cache?.detectedApiPath || 'نامشخص';
-
     await ctx.reply(`✅ اتصال برقرار!\n\n🔗 ${PANEL_URL}\n👤 ${PANEL_USERNAME}\n📡 مسیر API: ${apiPath}\n👥 کاربران: ${userCount}`);
   } catch (err) {
     await ctx.reply(`❌ خطا در اتصال:\n\n🔗 ${PANEL_URL}\n👤 ${PANEL_USERNAME}\n\nخطا: ${err.message}`);
   }
   adminQuickPanel(ctx);
 });
+
+bot.launch();
+console.log('🤖 Bot is running...');
 
