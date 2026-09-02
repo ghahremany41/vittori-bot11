@@ -1520,12 +1520,17 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
       [b('بازگشت ◀️', 'buy_sub', 'back')],
     ]));
   }
-  const buttons = plans.map((p) => [
-    b(`${p.validity} روز | ${formatNumber(p.price)} تومان | ${p.name}`, `plan_${p.gb}_${panelName}`, 'planSelect'),
-  ]);
+  const buttons = [];
+  for (let i = 0; i < plans.length; i += 2) {
+    const row = [b(`${plans[i].validity} روز | ${formatNumber(plans[i].price)} تومان`, `plan_${plans[i].gb}_${panelName}`, 'planSelect')];
+    if (i + 1 < plans.length) {
+      row.push(b(`${plans[i + 1].validity} روز | ${formatNumber(plans[i + 1].price)} تومان`, `plan_${plans[i + 1].gb}_${panelName}`, 'planSelect'));
+    }
+    buttons.push(row);
+  }
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
-  const panelDesc = panel.description ? `\n\n${escapeMarkdown(panel.description)}\n` : '';
-  safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
+  safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\n\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
 bot.action(/^plan_(\d+)_(.+?)(_2m)?$/, (ctx) => {
