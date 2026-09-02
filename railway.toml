@@ -1,0 +1,9 @@
+[build]
+  builder = "nixpacks"
+
+[deploy]
+  restartPolicyType = "always"
+  restartPolicyMaxSeconds = 30
+
+[env]
+  NODE_ENV = "production"
