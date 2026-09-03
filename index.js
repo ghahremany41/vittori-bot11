@@ -893,10 +893,79 @@ function adminMenu() {
   ]);
 }
 
+// === Referral processing (idempotent) ===
+// Extracted from bot.start so it can also run in the middleware.
+// WHY: bot.use blocks non-channel-members before bot.start ever runs,
+// which would silently drop the ?start=ref_XXX payload. Processing here
+// (right after ensureUser) preserves the referral. The
+// "already has referral" guard makes double-processing a safe no-op.
+function processReferral(newUserId, payload) {
+  if (!payload || !payload.startsWith('ref_')) return;
+  if (isBanned(newUserId)) return;
+  const referrerId = Number(payload.replace('ref_', ''));
+  console.log('[REFERRAL] Payload:', payload, 'ReferrerId:', referrerId, 'NewUserId:', newUserId);
+
+  // Validate referral reward amount
+  if (referralReward <= 0) {
+    console.log('[REFERRAL] ❌ Skip: referralReward is', referralReward);
+  }
+
+  // Only give reward if user has no referral yet
+  const currentUser = db.prepare('SELECT referred_by FROM users WHERE user_id = ?').get(newUserId);
+  console.log('[REFERRAL] CurrentUser referred_by:', currentUser?.referred_by);
+
+  if (referrerId && referrerId !== newUserId && referralReward > 0 && (!currentUser || !currentUser.referred_by)) {
+    const referrer = db.prepare('SELECT * FROM users WHERE user_id = ?').get(referrerId);
+    console.log('[REFERRAL] Referrer row:', referrer ? { id: referrer.user_id, banned: referrer.banned, username: referrer.username } : 'NOT FOUND');
+
+    if (referrer && !referrer.banned && referrerId !== ADMIN_ID) {
+      const insertReferral = db.transaction((referrerId, userId) => {
+        db.prepare('UPDATE users SET referred_by = ? WHERE user_id = ?').run(referrerId, userId);
+        db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ?').run(referralReward, referrerId);
+      });
+      try {
+        insertReferral(referrerId, newUserId);
+        console.log('[REFERRAL] ✅ Reward given to:', referrerId, 'amount:', referralReward);
+        bot.telegram.sendMessage(referrerId, `🎉 کاربر جدید با لینک دعوت شما وارد ربات شد!\n\n💰 *${formatNumber(referralReward)} تومان* به کیف پول شما اضافه شد!`, { parse_mode: 'Markdown' }).catch(() => {});
+      } catch (err) {
+        console.error('[REFERRAL] ❌ Transaction error:', err.message);
+        bot.telegram.sendMessage(ADMIN_ID, `❌ خطای دیتابیس در رفرال:\n${err.message}\nReferrer: ${referrerId}, New: ${newUserId}`).catch(() => {});
+      }
+    } else if (!referrer) {
+      console.log('[REFERRAL] ❌ Skip: referrer not in database (never started bot)');
+      bot.telegram.sendMessage(ADMIN_ID, `⚠️ رفرال ناموفق: دعوت‌کننده (${referrerId}) در دیتابیس نیست. او ربات رو استارت نزده.`).catch(() => {});
+    } else if (referrer.banned) {
+      console.log('[REFERRAL] ❌ Skip: referrer is banned');
+    } else if (referrerId === ADMIN_ID) {
+      console.log('[REFERRAL] ❌ Skip: referrer is admin');
+    }
+  } else if (currentUser && currentUser.referred_by) {
+    console.log('[REFERRAL] ❌ Skip: user already has referral (ID:', newUserId, ')');
+  } else if (referrerId === newUserId) {
+    console.log('[REFERRAL] ❌ Skip: self-referral');
+  } else if (referralReward <= 0) {
+    console.log('[REFERRAL] ❌ Skip: referralReward <= 0');
+    bot.telegram.sendMessage(ADMIN_ID, `⚠️ رفرال ناموفق: مبلغ جایزه (referralReward) روی ${referralReward} ست شده. در تنظیمات ادمین اصلاح کنید.`).catch(() => {});
+  } else {
+    console.log('[REFERRAL] ❌ Skip: invalid referrer or condition not met');
+  }
+}
+
 bot.use(async (ctx, next) => {
   // Register user IMMEDIATELY on any interaction (before channel check)
   if (ctx.from && ctx.from.id !== ADMIN_ID) {
     ensureUser(ctx);
+  }
+
+  // Process referral payload BEFORE the channel-membership gate.
+  // Otherwise a new user who hasn't joined the channel yet never reaches
+  // bot.start and their ?start=ref_XXX payload is lost forever.
+  // processReferral is idempotent (bot.start calls it again safely).
+  if (ctx.from && ctx.from.id !== ADMIN_ID && ctx.message && typeof ctx.message.text === 'string') {
+    const m = ctx.message.text.match(/^\/start\s+(\S+)/);
+    if (m && m[1]) {
+      try { processReferral(ctx.from.id, m[1]); } catch (e) { console.error('[REFERRAL] middleware error:', e.message); }
+    }
   }
 
   if (botOff && ctx.from && ctx.from.id !== ADMIN_ID) {
@@ -959,54 +1028,7 @@ bot.start(async (ctx) => {
   console.log('[START] User:', ctx.from.id, 'Existing:', !!existingUser, 'Payload:', payload);
 
   if (payload && payload.startsWith('ref_')) {
-    const referrerId = Number(payload.replace('ref_', ''));
-    const newUserId = ctx.from.id;
-    console.log('[REFERRAL] Payload:', payload, 'ReferrerId:', referrerId, 'NewUserId:', newUserId, 'ExistingUser:', !!existingUser);
-
-    // Validate referral reward amount
-    if (referralReward <= 0) {
-      console.log('[REFERRAL] ❌ Skip: referralReward is', referralReward);
-    }
-
-    // Only give reward if user has no referral yet
-    const currentUser = db.prepare('SELECT referred_by FROM users WHERE user_id = ?').get(newUserId);
-    console.log('[REFERRAL] CurrentUser referred_by:', currentUser?.referred_by);
-
-    if (referrerId && referrerId !== newUserId && referralReward > 0 && (!currentUser || !currentUser.referred_by)) {
-      const referrer = db.prepare('SELECT * FROM users WHERE user_id = ?').get(referrerId);
-      console.log('[REFERRAL] Referrer row:', referrer ? { id: referrer.user_id, banned: referrer.banned, username: referrer.username } : 'NOT FOUND');
-
-      if (referrer && !referrer.banned && referrerId !== ADMIN_ID) {
-        const insertReferral = db.transaction((referrerId, userId) => {
-          db.prepare('UPDATE users SET referred_by = ? WHERE user_id = ?').run(referrerId, userId);
-          db.prepare('UPDATE users SET wallet = wallet + ? WHERE user_id = ?').run(referralReward, referrerId);
-        });
-        try {
-          insertReferral(referrerId, newUserId);
-          console.log('[REFERRAL] ✅ Reward given to:', referrerId, 'amount:', referralReward);
-          bot.telegram.sendMessage(referrerId, `🎉 کاربر جدید با لینک دعوت شما وارد ربات شد!\n\n💰 *${formatNumber(referralReward)} تومان* به کیف پول شما اضافه شد!`, { parse_mode: 'Markdown' }).catch(() => {});
-        } catch (err) {
-          console.error('[REFERRAL] ❌ Transaction error:', err.message);
-          bot.telegram.sendMessage(ADMIN_ID, `❌ خطای دیتابیس در رفرال:\n${err.message}\nReferrer: ${referrerId}, New: ${newUserId}`).catch(() => {});
-        }
-      } else if (!referrer) {
-        console.log('[REFERRAL] ❌ Skip: referrer not in database (never started bot)');
-        bot.telegram.sendMessage(ADMIN_ID, `⚠️ رفرال ناموفق: دعوت‌کننده (${referrerId}) در دیتابیس نیست. او ربات رو استارت نزده.`).catch(() => {});
-      } else if (referrer.banned) {
-        console.log('[REFERRAL] ❌ Skip: referrer is banned');
-      } else if (referrerId === ADMIN_ID) {
-        console.log('[REFERRAL] ❌ Skip: referrer is admin');
-      }
-    } else if (currentUser && currentUser.referred_by) {
-      console.log('[REFERRAL] ❌ Skip: user already has referral (ID:', newUserId, ')');
-    } else if (referrerId === newUserId) {
-      console.log('[REFERRAL] ❌ Skip: self-referral');
-    } else if (referralReward <= 0) {
-      console.log('[REFERRAL] ❌ Skip: referralReward <= 0');
-      bot.telegram.sendMessage(ADMIN_ID, `⚠️ رفرال ناموفق: مبلغ جایزه (referralReward) روی ${referralReward} ست شده. در تنظیمات ادمین اصلاح کنید.`).catch(() => {});
-    } else {
-      console.log('[REFERRAL] ❌ Skip: invalid referrer or condition not met');
-    }
+    processReferral(ctx.from.id, payload);
   }
 
   if (ctx.from.id === ADMIN_ID) {
