@@ -1556,12 +1556,11 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
       [b('بازگشت ◀️', 'buy_sub', 'back')],
     ]));
   }
-  // One full-width button per plan: biggest buttons + full info.
-  // No Persian word inside the middle segment ("31" without "روز") plus a
-  // leading RLM, so mixed-direction segments can't split apart:
-  // "10GB | 31 | 50,000 تومان".
+  // One full-width button per plan: biggest buttons.
+  // Format is حجم | قیمت with a leading RLM, so mixed-direction
+  // segments can't split apart: "10GB | 50,000 تومان".
   const buttons = plans.map((p) => [
-    b(`\u200F${p.name} | ${p.validity} | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
+    b(`\u200F${p.name} | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
   const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
