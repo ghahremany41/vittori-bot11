@@ -1556,9 +1556,11 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
       [b('بازگشت ◀️', 'buy_sub', 'back')],
     ]));
   }
-  // One full-width button per plan: biggest buttons + full info (name, duration, price)
+  // One full-width button per plan: biggest buttons + full info (name, duration, price).
+  // Leading RLM (U+200F) forces RTL base direction so mixed Latin/Persian
+  // segments ("10GB | 31 روز | ...") don't get jumbled by the bidi algorithm.
   const buttons = plans.map((p) => [
-    b(`${p.name} | ${p.validity} روز | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
+    b(`\u200F${p.name} | ${p.validity} روز | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
   const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
