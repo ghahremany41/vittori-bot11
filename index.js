@@ -1557,10 +1557,10 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
     ]));
   }
   // One full-width button per plan: biggest buttons.
-  // Format is حجم | قیمت with a leading RLM, so mixed-direction
-  // segments can't split apart: "10GB | 50,000 تومان".
+  // Format is قیمت | حجم with a leading RLM, so mixed-direction
+  // segments can't split apart: "50,000 تومان | 10GB".
   const buttons = plans.map((p) => [
-    b(`\u200F${p.name} | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
+    b(`\u200F${formatNumber(p.price)} تومان | ${p.name}`, `plan_${p.gb}_${panelName}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
   const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
