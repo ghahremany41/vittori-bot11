@@ -769,7 +769,14 @@ async function safeAnswer(ctx) {
 async function safeEdit(ctx, text, options = {}) {
   try {
     await ctx.editMessageText(text, options);
-  } catch (_) {}
+  } catch (_) {
+    // Retry without parse_mode: a Markdown parsing error in dynamic
+    // content (e.g. panel description) must not silently freeze the screen.
+    try {
+      const { parse_mode, ...rest } = options;
+      await ctx.editMessageText(text, rest);
+    } catch (_) {}
+  }
 }
 
 // Feature 3: Loading message helper
@@ -1021,6 +1028,13 @@ bot.use(async (ctx, next) => {
 
 bot.start(async (ctx) => {
   const existingUser = db.prepare('SELECT * FROM users WHERE user_id = ?').get(ctx.from.id);
+  // NOTE: middleware already ran ensureUser, so existingUser is always set.
+  // Detect a truly NEW user by row age (SQLite CURRENT_TIMESTAMP is UTC).
+  let isNewUser = !existingUser;
+  try {
+    const createdMs = Date.parse(String(existingUser?.created_at || '').replace(' ', 'T') + 'Z');
+    if (!isNaN(createdMs) && Date.now() - createdMs < 5 * 60 * 1000) isNewUser = true;
+  } catch (_) {}
   const user = ensureUser(ctx);
   if (isBanned(ctx.from.id)) return ctx.reply('❌ حساب شما مسدود شده است.');
 
@@ -1039,7 +1053,7 @@ bot.start(async (ctx) => {
   }
 
   // Feature 1: Welcome with image - only for NEW users
-  if (welcomeImage && !existingUser) {
+  if (welcomeImage && isNewUser) {
     try {
       await ctx.replyWithPhoto(welcomeImage, {
         caption: welcomeMessage,
@@ -1542,14 +1556,10 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
       [b('بازگشت ◀️', 'buy_sub', 'back')],
     ]));
   }
-  const buttons = [];
-  for (let i = 0; i < plans.length; i += 2) {
-    const row = [b(`${plans[i].validity} روز | ${formatNumber(plans[i].price)} تومان`, `plan_${plans[i].gb}_${panelName}`, 'planSelect')];
-    if (i + 1 < plans.length) {
-      row.push(b(`${plans[i + 1].validity} روز | ${formatNumber(plans[i + 1].price)} تومان`, `plan_${plans[i + 1].gb}_${panelName}`, 'planSelect'));
-    }
-    buttons.push(row);
-  }
+  // One full-width button per plan: biggest buttons + full info (name, duration, price)
+  const buttons = plans.map((p) => [
+    b(`${p.name} | ${p.validity} روز | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
+  ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
   const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
   safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\n\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
