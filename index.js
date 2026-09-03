@@ -1557,11 +1557,11 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
     ]));
   }
   // One full-width button per plan: biggest buttons + full info.
-  // Text is Persian-first with NO Latin runs ("10 گیگ" not "10GB") plus a
-  // leading RLM, so the bidi algorithm renders segments in order on every
-  // client: "10 گیگ | 31 روز | 50,000 تومان".
+  // No Persian word inside the middle segment ("31" without "روز") plus a
+  // leading RLM, so mixed-direction segments can't split apart:
+  // "10GB | 31 | 50,000 تومان".
   const buttons = plans.map((p) => [
-    b(`\u200F${p.gb} گیگ | ${p.validity} روز | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
+    b(`\u200F${p.name} | ${p.validity} | ${formatNumber(p.price)} تومان`, `plan_${p.gb}_${panelName}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
   const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
