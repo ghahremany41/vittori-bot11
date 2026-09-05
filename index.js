@@ -414,9 +414,25 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
-const db = new Database(dbPath);
-// redeploy trigger
-db.pragma('journal_mode = WAL');
+let db;
+let dbRecoveredFresh = false;
+try {
+  db = new Database(dbPath);
+  // redeploy trigger
+  db.pragma('journal_mode = WAL');
+} catch (openErr) {
+  // Unreadable/corrupt database file (e.g. torn upload): quarantine it aside
+  // (never delete) and boot a fresh DB so the bot stays up for restore.
+  console.error('[DB] cannot open database, quarantining:', openErr.message);
+  try {
+    fs.renameSync(dbPath, dbPath + '.corrupt-' + Date.now());
+    try { fs.unlinkSync(dbPath + '-wal'); } catch (_) {}
+    try { fs.unlinkSync(dbPath + '-shm'); } catch (_) {}
+  } catch (_) {}
+  db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  dbRecoveredFresh = true;
+}
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
@@ -694,6 +710,11 @@ function saveSettings() {
 }
 
 loadSettings();
+// Fresh recovery boot after quarantining a corrupt DB: stay OFF until admin re-enables.
+if (dbRecoveredFresh) {
+  botOff = true;
+  try { db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('botOff', 'true'); } catch (_) {}
+}
 // Discover group IDs on startup for all active panels
 getActivePanels().forEach(p => discoverGroupIds(p.name).catch(() => {}));
 
