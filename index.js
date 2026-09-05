@@ -414,16 +414,38 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 
+function sleepSync(ms) {
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
+}
+
 let db;
 let dbRecoveredFresh = false;
-try {
-  db = new Database(dbPath);
-  // redeploy trigger
-  db.pragma('journal_mode = WAL');
-} catch (openErr) {
-  // Unreadable/corrupt database file (e.g. torn upload): quarantine it aside
+let openErr = null;
+// Retry: an upload/rename in flight can make the file briefly unreadable.
+for (let i = 0; i < 6; i++) {
+  try {
+    db = new Database(dbPath);
+    // redeploy trigger
+    db.pragma('journal_mode = WAL');
+    openErr = null;
+    break;
+  } catch (e) { openErr = e; sleepSync(3000); }
+}
+if (openErr) {
+  // Still failing: PROVE corruption (read-only integrity check) before
+  // quarantining, so a transient partial file is never mistaken for a
+  // corrupt database.
+  let provenCorrupt = true;
+  try {
+    const ro = new Database(dbPath, { readonly: true });
+    const res = ro.pragma('integrity_check', { simple: true });
+    ro.close();
+    if (res === 'ok') provenCorrupt = false;
+  } catch (_) { /* stays true */ }
+  if (!provenCorrupt) throw openErr; // readable: fail loudly, do NOT quarantine
+  // Unreadable/corrupt database file: quarantine it aside
   // (never delete) and boot a fresh DB so the bot stays up for restore.
-  console.error('[DB] cannot open database, quarantining:', openErr.message);
+  console.error('[DB] database proven corrupt, quarantining:', openErr.message);
   try {
     fs.renameSync(dbPath, dbPath + '.corrupt-' + Date.now());
     try { fs.unlinkSync(dbPath + '-wal'); } catch (_) {}
