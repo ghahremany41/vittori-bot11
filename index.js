@@ -184,9 +184,9 @@ async function fetchPanelUserInfo(panelName, panelUsername) {
 }
 
 // === Auto-delivery function ===
-async function autoDeliverOrder(orderId, ctx) {
+async function autoDeliverOrder(orderId, ctx, opts = {}) {
   const order = db.prepare('SELECT * FROM orders WHERE id = ?').get(orderId);
-  if (!order) return false;
+  if (!order) return { ok: false, error: 'سفارش یافت نشد' };
 
   const panel = order.panel || 'pasarguard';
   const creds = getPanelCredentials(panel);
@@ -231,11 +231,13 @@ async function autoDeliverOrder(orderId, ctx) {
       : 'https://' + new URL(creds.url).host + created.subscription_url;
   } catch (err) {
     console.error('Auto-deliver error:', err.message);
-    bot.telegram.sendMessage(ADMIN_ID,
-      `❌ خطا در تحویل اتوماتیک سفارش #${orderId}\n${err.message}\n\nلطفاً دستی تحویل دهید.`,
-      { parse_mode: 'Markdown' }
-    ).catch(() => {});
-    return false;
+    if (!opts.quiet) {
+      bot.telegram.sendMessage(ADMIN_ID,
+        `❌ خطا در تحویل اتوماتیک سفارش #${orderId}\n${err.message}\n\nلطفاً دستی تحویل دهید.`,
+        { parse_mode: 'Markdown' }
+      ).catch(() => {});
+    }
+    return { ok: false, error: err.message };
   }
 
   // Generate QR via API
@@ -255,21 +257,35 @@ async function autoDeliverOrder(orderId, ctx) {
     `🔗 *لینک اتصال:*\n\`${subUrl}\`\n\n` +
     `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
 
-  await ctx.replyWithPhoto(qrUrl, {
-    caption: msg,
-    parse_mode: 'Markdown',
-    ...Markup.inlineKeyboard([[b('سرویس‌های من 📦', 'my_services', 'myServices')]]),
-  });
+  const deliveryMarkup = Markup.inlineKeyboard([[b('سرویس‌های من 📦', 'my_services', 'myServices')]]);
+  const buyerId = order.user_id;
+  if (ctx && ctx.replyWithPhoto) {
+    await ctx.replyWithPhoto(qrUrl, {
+      caption: msg,
+      parse_mode: 'Markdown',
+      ...deliveryMarkup,
+    });
+  } else {
+    // No buyer context (e.g. admin retry) — deliver straight to the buyer's chat
+    await bot.telegram.sendPhoto(buyerId, qrUrl, {
+      caption: msg,
+      parse_mode: 'Markdown',
+      ...deliveryMarkup,
+    });
+  }
 
   // Notify admin
-  bot.telegram.sendMessage(ADMIN_ID,
-    `✅ سفارش #${orderId} به صورت اتوماتیک تحویل داده شد\n` +
-    `👤 @${ctx.from.username || 'ندارد'} (${ctx.from.id})\n` +
-    `🔹 ${order.plan_name} | ${order.plan_gb}GB | ${order.validity} روز`,
-    { parse_mode: 'Markdown' }
-  ).catch(() => {});
+  if (!opts.quiet) {
+    const buyerTag = ctx && ctx.from ? `@${ctx.from.username || 'ندارد'} (${ctx.from.id})` : `${buyerId}`;
+    bot.telegram.sendMessage(ADMIN_ID,
+      `✅ سفارش #${orderId} به صورت اتوماتیک تحویل داده شد\n` +
+      `👤 ${buyerTag}\n` +
+      `🔹 ${order.plan_name} | ${order.plan_gb}GB | ${order.validity} روز`,
+      { parse_mode: 'Markdown' }
+    ).catch(() => {});
+  }
 
-  return true;
+  return { ok: true };
 }
 // Per-panel group IDs cache: { panelName: groupIds[] }
 const discoveredGroupIdsCache = {};
@@ -2913,6 +2929,26 @@ bot.action(/^admin_order_reject_(\d+)$/, (ctx) => {
   bot.telegram.sendMessage(order.user_id, '❌ سفارش شما توسط ادمین رد شد.\nمبلغ به کیف پول شما بازگردانده شد.', mainMenu());
 });
 
+bot.action(/^admin_order_retry_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+
+  const orderId = Number(ctx.match[1]);
+  const order = db.prepare('SELECT * FROM orders WHERE id = ? AND status = ?').get(orderId, 'pending');
+
+  if (!order) {
+    return safeEdit(ctx, '❌ این سفارش در انتظار نیست (قبلاً پردازش شده است).');
+  }
+
+  await safeEdit(ctx, `🔄 در حال تلاش مجدد برای تحویل سفارش #${orderId}...\n⏳ لطفاً صبر کنید.`);
+  const result = await autoDeliverOrder(orderId, null, { quiet: true });
+
+  if (result && result.ok) {
+    return safeEdit(ctx, `✅ سفارش #${orderId} با موفقیت تحویل داده شد و برای کاربر ارسال شد.`);
+  }
+  return safeEdit(ctx, `❌ تحویل مجدد سفارش #${orderId} ناموفق بود.\n\nخطا: ${result && result.error ? result.error : 'نامشخص'}\n\nمی‌توانید دوباره تلاش کنید یا دستی تحویل دهید.`);
+});
+
 bot.action('prices', (ctx) => {
   safeAnswer(ctx);
   safeEdit(ctx, '💰 *لیست قیمت‌ها*\n\nمدت اشتراک را انتخاب کنید:', {
@@ -3691,7 +3727,8 @@ bot.action('admin_orders', (ctx) => {
   });
 
   const buttons = orders.map((o) => [
-    Markup.button.callback(`❌ #${o.id}`, `admin_order_reject_${o.id}`),
+    Markup.button.callback(`🔄 تلاش مجدد #${o.id}`, `admin_order_retry_${o.id}`),
+    Markup.button.callback(`❌ رد #${o.id}`, `admin_order_reject_${o.id}`),
   ]);
   buttons.push([b('بازگشت ◀️', 'back_to_menu', 'back')]);
 
