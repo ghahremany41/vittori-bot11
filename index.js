@@ -956,6 +956,7 @@ function adminMenu() {
     [b('⚙️ تنظیمات ربات', 'admin_bot_settings', 'settings')],
     [b('🎨 تنظیمات رنگ دکمه‌ها', 'admin_color_settings', 'toggle')],
     [b('💾 بکاپ کامل', 'admin_backup', 'settings')],
+    [b('♻️ ریستور دیتابیس', 'admin_restore', 'settings')],
   ]);
 }
 
@@ -1887,6 +1888,71 @@ bot.on('photo', async (ctx) => {
     }
     delete userState[ctx.from.id];
     return;
+  }
+});
+
+// === In-app database restore (admin only) ===
+// Admin taps "♻️ ریستور دیتابیس" then sends the backup .db as a DOCUMENT.
+// The file is validated (SQLite + integrity + required tables + non-empty
+// users) and only swapped in after explicit confirmation, so a wrong file
+// can never wipe the live database.
+bot.on('document', async (ctx) => {
+  if (!ctx.from || ctx.from.id !== ADMIN_ID) return;
+  const st = adminState[ADMIN_ID];
+  if (!st || st.action !== 'restore_wait_file') return;
+
+  const doc = ctx.message && ctx.message.document;
+  if (!doc || !doc.file_name || !doc.file_name.toLowerCase().endsWith('.db')) {
+    return ctx.reply('❌ لطفاً فایل دیتابیس (.db) را به صورت فایل ارسال کنید.');
+  }
+  if ((doc.file_size || 0) > 20 * 1024 * 1024) {
+    return ctx.reply('❌ حجم فایل بیش از حد مجاز است (حداکثر ۲۰ مگابایت).');
+  }
+
+  const tmp = dbPath + '.restore-incoming';
+  ctx.reply('⏳ در حال دریافت و بررسی فایل...');
+  try {
+    const link = await ctx.telegram.getFileLink(doc.file_id);
+    await new Promise((resolve, reject) => {
+      https.get(link.href, (res) => {
+        if (res.statusCode !== 200) return reject(new Error('download failed: ' + res.statusCode));
+        const ws = fs.createWriteStream(tmp);
+        res.pipe(ws);
+        ws.on('finish', () => ws.close(resolve));
+        ws.on('error', reject);
+      }).on('error', reject);
+    });
+
+    // Validate before touching anything live
+    const vdb = new Database(tmp, { readonly: true });
+    let summary = null;
+    try {
+      const iv = vdb.pragma('integrity_check', { simple: true });
+      if (iv !== 'ok') throw new Error('integrity_check failed');
+      const tables = vdb.prepare("SELECT name FROM sqlite_master WHERE type='table'").all().map(r => r.name);
+      for (const t of ['users', 'orders', 'charges', 'plans', 'panels', 'settings']) {
+        if (!tables.includes(t)) throw new Error('missing table: ' + t);
+      }
+      const users = vdb.prepare('SELECT COUNT(*) as c FROM users').get().c;
+      const orders = vdb.prepare('SELECT COUNT(*) as c FROM orders').get().c;
+      if (!users || users < 1) throw new Error('users table is empty');
+      summary = { users, orders };
+    } finally {
+      try { vdb.close(); } catch (_) {}
+    }
+
+    adminState[ADMIN_ID] = { action: 'restore_confirm', file: tmp };
+    return ctx.reply(
+      `✅ فایل معتبر است:\n\n👥 کاربران: ${summary.users}\n📦 سفارشات: ${summary.orders}\n\n⚠️ با تایید، دیتابیس فعلی جایگزین می‌شود و ربات ری‌استارت می‌شود.`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ اجرا و ری‌استارت', 'admin_restore_confirm')],
+        [b('❌ لغو', 'back_to_menu', 'back')],
+      ])
+    );
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    console.error('[RESTORE] failed:', e.message);
+    return ctx.reply('❌ فایل معتبر نیست: ' + e.message + '\nدوباره تلاش کنید یا لغو کنید.');
   }
 });
 
@@ -4922,6 +4988,50 @@ bot.action('admin_backup', async (ctx) => {
     sampleUsers +
     `\n\n💡 برای ریستور: این فایل رو به /data/bot.db کپی کنید`
   });
+});
+
+bot.action('admin_restore', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  adminState[ADMIN_ID] = { action: 'restore_wait_file' };
+  safeEdit(ctx, '♻️ *ریستور دیتابیس*\n\nفایل بکاپ (.db) را به صورت *فایل* (نه عکس) همینجا ارسال کنید.\n\n⚠️ فایل ابتدا بررسی می‌شود و فقط با تایید شما جایگزین می‌گردد.', {
+    parse_mode: 'Markdown',
+    ...Markup.inlineKeyboard([[b('لغو', 'back_to_menu', 'back')]]),
+  });
+});
+
+bot.action('admin_restore_confirm', async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const st = adminState[ADMIN_ID];
+  if (!st || st.action !== 'restore_confirm' || !st.file) {
+    return safeEdit(ctx, '❌ فایلی برای ریستور آماده نیست. دوباره تلاش کنید.');
+  }
+  const tmp = st.file;
+  delete adminState[ADMIN_ID];
+  try {
+    // Final re-validation
+    const vdb = new Database(tmp, { readonly: true });
+    try {
+      if (vdb.pragma('integrity_check', { simple: true }) !== 'ok') throw new Error('corrupt');
+      vdb.prepare('SELECT COUNT(*) as c FROM users').get();
+    } finally {
+      try { vdb.close(); } catch (_) {}
+    }
+    // Quiesce: block money-moving actions during the swap.
+    botOff = true;
+    try { db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('botOff', 'true'); } catch (_) {}
+    db.close();
+    try { fs.unlinkSync(dbPath + '-wal'); } catch (_) {}
+    try { fs.unlinkSync(dbPath + '-shm'); } catch (_) {}
+    fs.renameSync(tmp, dbPath);
+    await ctx.reply('✅ دیتابیس جایگزین شد. ربات در حال ری‌استارت است...');
+    setTimeout(() => process.exit(1), 1500); // Railway restarts on failure exit
+  } catch (e) {
+    console.error('[RESTORE] swap failed:', e.message);
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    ctx.reply('❌ خطا در جایگزینی: ' + e.message);
+  }
 });
 
 bot.catch((err, ctx) => {
