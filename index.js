@@ -5000,4 +5000,16 @@ bot.action('admin_quick_test', async (ctx) => {
 
 bot.launch();
 console.log('🤖 Bot is running...');
+try {
+  const st = fs.statSync(dbPath);
+  const counts = {
+    users: db.prepare('SELECT COUNT(*) as c FROM users').get().c,
+    orders: db.prepare('SELECT COUNT(*) as c FROM orders').get().c,
+    charges: db.prepare('SELECT COUNT(*) as c FROM charges').get().c,
+    panels: db.prepare('SELECT COUNT(*) as c FROM panels').get().c,
+  };
+  console.log(`[BOOT] dbPath=${dbPath} size=${st.size} users=${counts.users} orders=${counts.orders} charges=${counts.charges} panels=${counts.panels} botOff=${botOff}`);
+} catch (e) {
+  console.log('[BOOT] diagnostics failed:', e.message);
+}
 
