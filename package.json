@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "prestart": "cp bot.db /data/bot.db || true",
+    "prestart": "[ -f /data/bot.db ] || cp bot.db /data/bot.db || true",
     "start": "node index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
