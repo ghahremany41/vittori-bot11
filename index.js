@@ -957,6 +957,7 @@ function adminMenu() {
     [b('🎨 تنظیمات رنگ دکمه‌ها', 'admin_color_settings', 'toggle')],
     [b('💾 بکاپ کامل', 'admin_backup', 'settings')],
     [b('♻️ ریستور دیتابیس', 'admin_restore', 'settings')],
+    [b('🧪 تست ایموجی پریمیوم', 'admin_test_premium_emoji', 'settings')],
   ]);
 }
 
@@ -4905,6 +4906,19 @@ bot.action('admin_edit_panel_password', (ctx) => {
   safeEdit(ctx, `🔒 پسورد فعلی پنل: ${maskedPass}\n\n📝 پسورد جدید را ارسال کنید:`, {
     ...Markup.inlineKeyboard([[b('لغو', 'admin_bot_settings', 'back')]]),
   });
+});
+
+bot.action('admin_test_premium_emoji', async (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  try {
+    await ctx.reply(
+      `🧪 <b>تست ایموجی پریمیوم</b>\n\nاین یک ایموجی پریمیوم است: <tg-emoji emoji-id="5368324170671202286">👍</tg-emoji>\n\nاگه بالا ایموجی متحرک دیدی، پریمیوم توی متن کار می‌کنه ✅\nاگه 👍 ساده دیدی، یعنی فالبک نمایش داده شده.`,
+      { parse_mode: 'HTML' }
+    );
+  } catch (e) {
+    await ctx.reply('❌ خطا در ارسال (ID نامعتبر است): ' + e.message);
+  }
 });
 
 bot.action('admin_backup', async (ctx) => {
