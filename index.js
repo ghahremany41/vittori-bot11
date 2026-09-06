@@ -817,7 +817,9 @@ function formatNumber(n) {
 }
 
 function escapeMarkdown(s) {
-  return String(s).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
+  // NOTE: '+' is intentionally NOT escaped — Telegram renders '\+' literally.
+  // A raw '+' never starts Markdown formatting, so leaving it is safe.
+  return String(s).replace(/[_*[\]()~`>#\-=|{}.!\\]/g, '\\$&');
 }
 
 // Custom emoji helper for HTML format
