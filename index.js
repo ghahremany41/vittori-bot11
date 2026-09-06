@@ -653,12 +653,14 @@ let buttonColors = {
 let referralReward = 30000;
 let minCharge = 10000;
 let maxCharge = 2000000;
+// Duration sections (30/60/90 days) can be toggled on/off by admin
+let durationsEnabled = { 30: true, 60: true, 90: true };
 let welcomeImage = ''; // Feature 1: Welcome image URL
 let welcomeMessage = '🎉 به fastxlinebot خوش آمدید!\n\nخوشحالیم که ما را انتخاب کردید. 🌹\nما در تلاشیم تا تجربه‌ای امن، پرسرعت و پایدار از اینترنت آزاد را برای شما فراهم کنیم.\n\n🚀 ویژگی‌های سرویس ما:\n⚡️ سرعت و پایداری بالا\n🛡 امنیت و حریم خصوصی تضمین‌شده\n📞 پشتیبانی پاسخگو\n💰 تعرفه‌های منصفانه و اقتصادی\n\n👇 برای شروع، لطفاً از منوی زیر انتخاب کنید:';
 let channelMessage = '⚠️ *عضویت اجباری*\n\nبرای استفاده از ربات، ابتدا در کانال ما عضو شوید:\n\n📢 @{CHANNEL}\n\nپس از عضویت، دکمه زیر را بزنید:';
 
 function loadSettings() {
-  const saved = db.prepare("SELECT key, value FROM settings WHERE key IN ('buttonStyles', 'buttonColors', 'botOff', 'referralReward', 'minCharge', 'maxCharge', 'welcomeMessage', 'welcomeImage', 'channelMessage', 'ADMIN_USERNAME', 'CARD_NUMBER', 'CARD_OWNER', 'CHANNEL_USERNAME', 'PANEL_URL', 'PANEL_USERNAME', 'PANEL_PASSWORD', 'group_ids')").all();
+  const saved = db.prepare("SELECT key, value FROM settings WHERE key IN ('buttonStyles', 'buttonColors', 'botOff', 'referralReward', 'minCharge', 'maxCharge', 'welcomeMessage', 'welcomeImage', 'channelMessage', 'ADMIN_USERNAME', 'CARD_NUMBER', 'CARD_OWNER', 'CHANNEL_USERNAME', 'PANEL_URL', 'PANEL_USERNAME', 'PANEL_PASSWORD', 'group_ids', 'durations')").all();
   saved.forEach(row => {
     if (row.key === 'buttonStyles') {
       buttonStyles = row.value === 'true';
@@ -694,6 +696,8 @@ function loadSettings() {
       PANEL_PASSWORD = row.value || PANEL_PASSWORD;
     } else if (row.key === 'group_ids') {
       try { discoveredGroupIds = JSON.parse(row.value); } catch (_) {}
+    } else if (row.key === 'durations') {
+      try { durationsEnabled = { 30: true, 60: true, 90: true, ...JSON.parse(row.value) }; } catch (_) {}
     }
   });
   // Clear cached token so it re-authenticates with potentially new credentials
@@ -720,6 +724,7 @@ function saveSettings() {
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('PANEL_USERNAME', String(PANEL_USERNAME));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('PANEL_PASSWORD', String(PANEL_PASSWORD));
   db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('group_ids', JSON.stringify(discoveredGroupIds));
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").run('durations', JSON.stringify(durationsEnabled));
   // Clear all panel token caches so they re-authenticate with potentially new credentials
   Object.keys(panelTokenCache).forEach(key => {
     panelTokenCache[key] = { token: null, expiry: 0, detectedApiPath: null };
@@ -872,6 +877,43 @@ function getPlansByPanel(panel) {
 
 function getPlanByGb(gb, panel = 'pasarguard') {
   return db.prepare('SELECT * FROM plans WHERE gb = ? AND active = 1 AND panel = ?').get(gb, panel);
+}
+
+function getPlanById(id) {
+  return db.prepare('SELECT * FROM plans WHERE id = ?').get(id);
+}
+
+function getPlanByGbValidity(gb, validity, panel) {
+  return db.prepare('SELECT * FROM plans WHERE gb = ? AND validity = ? AND panel = ? AND active = 1').get(gb, validity, panel);
+}
+
+// Duration sections: plans are grouped by validity into 30/60/90-day buckets.
+// Current 31-day plans fall into the 30-day bucket (no migration needed).
+const DURATION_OPTIONS = [30, 60, 90];
+const DURATION_LABELS = { 30: '30 روزه', 60: '60 روزه', 90: '90 روزه' };
+function durationBucket(validity) {
+  const v = Number(validity);
+  if (v <= 45) return 30;
+  if (v <= 75) return 60;
+  return 90;
+}
+function durationRange(days) {
+  if (days === 30) return [1, 45];
+  if (days === 60) return [46, 75];
+  return [76, 999999];
+}
+function normalizeDuration(days) {
+  const d = Number(days);
+  if (d === 30 || d === 60 || d === 90) return d;
+  return durationBucket(d);
+}
+function countPlansInBucket(panel, days) {
+  const [min, max] = durationRange(days);
+  return db.prepare('SELECT COUNT(*) as c FROM plans WHERE active = 1 AND panel = ? AND validity >= ? AND validity <= ?').get(panel, min, max).c;
+}
+function getPlansInBucket(panel, days) {
+  const [min, max] = durationRange(days);
+  return db.prepare('SELECT * FROM plans WHERE active = 1 AND panel = ? AND validity >= ? AND validity <= ? ORDER BY price ASC').all(panel, min, max);
 }
 
 function getActivePanels() {
@@ -1158,7 +1200,7 @@ bot.command('renew', (ctx) => {
   const orders = db.prepare("SELECT * FROM orders WHERE user_id = ? AND status = 'delivered' ORDER BY created_at DESC").all(ctx.from.id);
   if (orders.length === 0) return ctx.reply('❌ شما سرویس فعالی ندارید.\nابتدا یک اشتراک خریداری کنید.', mainMenu());
   const latest = orders[0];
-  const plan = getPlanByGb(latest.plan_gb, latest.panel || 'pasarguard');
+  const plan = getPlanByGbValidity(latest.plan_gb, latest.validity, latest.panel || 'pasarguard');
   if (!plan) return ctx.reply('❌ پلن یافت نشد.', mainMenu());
 
   const wallet = getWallet(ctx.from.id);
@@ -1173,7 +1215,7 @@ bot.command('renew', (ctx) => {
     (canPay ? `✅ موجودی کافی است` : `❌ موجودی کافی نیست`),
     { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
       canPay
-        ? [b(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `pay_${plan.gb}_${latest.panel || 'pasarguard'}`, 'primary')]
+        ? [b(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `payid_${plan.id}`, 'primary')]
         : [b('💰 افزایش موجودی', 'add_balance', 'addBalance')],
       [b('بازگشت ◀️', 'back_to_menu', 'back')],
     ])}
@@ -1609,31 +1651,55 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
   const panel = getPanelByName(panelName);
   if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.', mainMenu());
 
-  // Show all plans directly (no duration selection)
-  const plans = db.prepare('SELECT * FROM plans WHERE active = 1 AND panel = ? ORDER BY price ASC').all(panelName);
-  if (plans.length === 0) {
-    return safeEdit(ctx, '❌ پلنی برای این پنل موجود نیست.', Markup.inlineKeyboard([
-      [b('بازگشت ◀️', 'buy_sub', 'back')],
-    ]));
+  // Step 1: choose duration (30/60/90 days)
+  const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
+  const enabledDurations = DURATION_OPTIONS.filter(d => durationsEnabled[d]);
+  if (enabledDurations.length === 0) {
+    return safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\n\n❌ در حال حاضر فروشی فعال نیست.`, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'buy_sub', 'back')]]),
+    });
   }
-  // One full-width button per plan: biggest buttons.
-  // Format is قیمت • حجم with a leading RLM, so mixed-direction
-  // segments can't split apart: "50,000 تومان • 10GB".
-  const buttons = plans.map((p) => [
-    b(`\u200F${formatNumber(p.price)} تومان • ${p.name}`, `plan_${p.gb}_${panelName}`, 'planSelect'),
+  const buttons = enabledDurations.map((d) => [
+    b(`🔹 ${DURATION_LABELS[d]} (${countPlansInBucket(panelName, d)} پلن)`, `duration_${panelName}_${d}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
-  const panelDesc = panel.description ? `\n📝 ${escapeMarkdown(panel.description)}` : '';
-  safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\n\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\n\n⏳ مدت زمان سرویس را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
-bot.action(/^plan_(\d+)_(.+?)(_2m)?$/, (ctx) => {
+bot.action(/^duration_([\w]+)_(\d+)$/, (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
-  const gb = Number(ctx.match[1]);
-  const panel = ctx.match[2];
-  const plan = getPlanByGb(gb, panel);
-  if (!plan) return safeEdit(ctx, '❌ این پلن دیگر موجود نیست.', mainMenu());
+  const panelName = ctx.match[1];
+  const days = normalizeDuration(ctx.match[2]);
+  const panel = getPanelByName(panelName);
+  if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.', mainMenu());
+  if (!durationsEnabled[days]) {
+    return safeEdit(ctx, '❌ این بخش در حال حاضر غیرفعال است.', Markup.inlineKeyboard([
+      [b('بازگشت ◀️', `select_${panelName}`, 'back')],
+    ]));
+  }
+
+  // Step 2: plans in this duration bucket
+  const plans = getPlansInBucket(panelName, days);
+  if (plans.length === 0) {
+    return safeEdit(ctx, `📦 *${escapeMarkdown(panel.display_name)} | ${DURATION_LABELS[days]}*\n\n❌ پلنی در این بخش موجود نیست.`, {
+      parse_mode: 'Markdown',
+      ...Markup.inlineKeyboard([[b('بازگشت ◀️', `select_${panelName}`, 'back')]]),
+    });
+  }
+  const buttons = plans.map((p) => [
+    b(`\u200F${formatNumber(p.price)} تومان • ${p.name}`, `planid_${p.id}`, 'planSelect'),
+  ]);
+  buttons.push([b('بازگشت ◀️', `select_${panelName}`, 'back')]);
+  safeEdit(ctx, `📦 *${escapeMarkdown(panel.display_name)} | ${DURATION_LABELS[days]}*\n\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+bot.action(/^planid_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (isBanned(ctx.from.id)) return;
+  const plan = getPlanById(Number(ctx.match[1]));
+  if (!plan || !plan.active) return safeEdit(ctx, '❌ این پلن دیگر موجود نیست.', mainMenu());
 
   const validity = plan.validity;
   const price = plan.price;
@@ -1645,35 +1711,35 @@ bot.action(/^plan_(\d+)_(.+?)(_2m)?$/, (ctx) => {
     `🔹 قیمت: ${formatNumber(price)} تومان\n` +
     `🔹 موجودی کیف پول شما: ${formatNumber(wallet)} تومان`;
 
-  const payAction = `pay_${plan.gb}_${panel}`;
+  const payAction = `payid_${plan.id}`;
   const buttons = [
     [b('💳 پرداخت و دریافت سرویس', payAction, 'payment')],
-    [b('🏷️ استفاده از کد تخفیف', `discount_apply_${plan.gb}_${panel}`, 'discount')],
+    [b('🏷️ استفاده از کد تخفیف', `discount_apply_${plan.id}`, 'discount')],
     [b('بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
   ];
 
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
-bot.action(/^discount_apply_(\d+)_(.+)$/, (ctx) => {
+bot.action(/^discount_apply_(\d+)$/, (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
-  const gb = Number(ctx.match[1]);
-  const panel = ctx.match[2];
-  userState[ctx.from.id] = { action: 'wait_discount_code', gb, panel };
+  const planId = Number(ctx.match[1]);
+  const plan = getPlanById(planId);
+  if (!plan || !plan.active) return safeEdit(ctx, '❌ این پلن دیگر موجود نیست.', mainMenu());
+  userState[ctx.from.id] = { action: 'wait_discount_code', planId };
   safeEdit(ctx, '🏷️ *کد تخفیف*\n\n📝 کد تخفیف خود را ارسال کنید:', {
     parse_mode: 'Markdown',
     ...Markup.inlineKeyboard([[b('لغو', 'back_to_menu', 'back')]]),
   });
 });
 
-bot.action(/^pay_(\d+)_(.+?)(_2m)?$/, async (ctx) => {
+bot.action(/^payid_(\d+)$/, async (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
-  const gb = Number(ctx.match[1]);
-  const panel = ctx.match[2];
-  const plan = getPlanByGb(gb, panel);
-  if (!plan) return safeEdit(ctx, '❌ این پلن دیگر موجود نیست.', mainMenu());
+  const plan = getPlanById(Number(ctx.match[1]));
+  if (!plan || !plan.active) return safeEdit(ctx, '❌ این پلن دیگر موجود نیست.', mainMenu());
+  const panel = plan.panel;
   const userId = ctx.from.id;
   const currentWallet = getWallet(userId);
 
@@ -1700,12 +1766,14 @@ bot.action(/^pay_(\d+)_(.+?)(_2m)?$/, async (ctx) => {
   // Feature 3: Delete loading message
   deleteMessage(ctx, loadingMsg);
 
+  const panelData = getPanelByName(panel);
+  const panelLabel = panelData ? panelData.display_name : panel;
   const adminText =
     `📥 *سفارش جدید*\n\n` +
     `🆔 #${order.id}\n` +
     `👤 کاربر: @${escapeMarkdown(ctx.from.username || 'ندارد')} (${ctx.from.id})\n` +
     `🔹 سرویس: ${escapeMarkdown(plan.name)}\n` +
-    `🔹 پنل: ${panel === 'pasarguard' ? 'Pasarguard' : 'اقتصادی'}\n` +
+    `🔹 پنل: ${escapeMarkdown(panelLabel)}\n` +
     `🔹 مدت: ${validity} روز\n` +
     `🔹 مبلغ: ${formatNumber(price)} تومان\n` +
     `🔹 موجودی باقی‌مانده: ${formatNumber(currentWallet - price)} تومان`;
@@ -1714,14 +1782,13 @@ bot.action(/^pay_(\d+)_(.+?)(_2m)?$/, async (ctx) => {
 });
 
 // Pay with discount code
-bot.action(/^pay_discount_(\d+)_(.+?)_(.+)$/, async (ctx) => {
+bot.action(/^pay_discount_(\d+)_(.+)$/, async (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
-  const gb = Number(ctx.match[1]);
-  const panel = ctx.match[2];
-  const code = ctx.match[3];
-  const plan = getPlanByGb(gb, panel);
-  if (!plan) return safeEdit(ctx, '❌ این پلن دیگر موجود نیست.', mainMenu());
+  const plan = getPlanById(Number(ctx.match[1]));
+  const code = ctx.match[2];
+  const panel = plan ? plan.panel : null;
+  if (!plan || !plan.active) return safeEdit(ctx, '❌ این پلن دیگر موجود نیست.', mainMenu());
 
   const discount = db.prepare('SELECT * FROM discount_codes WHERE code = ? AND active = 1').get(code);
   if (!discount) return safeEdit(ctx, '❌ کد تخفیف معتبر نیست.', mainMenu());
@@ -1750,12 +1817,14 @@ bot.action(/^pay_discount_(\d+)_(.+?)_(.+)$/, async (ctx) => {
   // Auto-deliver immediately
   await autoDeliverOrder(order.id, ctx);
 
+  const panelData2 = getPanelByName(panel);
+  const panelLabel2 = panelData2 ? panelData2.display_name : panel;
   const adminText =
     `📥 *سفارش جدید با تخفیف*\n\n` +
     `🆔 #${order.id}\n` +
     `👤 کاربر: @${escapeMarkdown(ctx.from.username || 'ندارد')} (${ctx.from.id})\n` +
     `🔹 سرویس: ${escapeMarkdown(plan.name)}\n` +
-    `🔹 پنل: ${panel === 'pasarguard' ? 'Pasarguard' : 'اقتصادی'}\n` +
+    `🔹 پنل: ${escapeMarkdown(panelLabel2)}\n` +
     `🔹 مدت: ${plan.validity} روز\n` +
     `🔹 قیمت اصلی: ${formatNumber(originalPrice)} تومان\n` +
     `🏷️ کد تخفیف: ${code} (${discount.percent}%)\n` +
@@ -2086,7 +2155,7 @@ bot.on('text', async (ctx) => {
       if (isNaN(gb) || gb < 1) {
         return ctx.reply('❌ حجم نامعتبر است. مثال: 20GB');
       }
-      adminState[userId] = { action: 'add_plan_validity', name, gb, panel: state.panel };
+      adminState[userId] = { action: 'add_plan_validity', name, gb, panel: state.panel, days: state.days };
       return ctx.reply(`✅ نام: ${name} | حجم: ${gb}GB\n\n📅 مدت اشتراک (روز) را وارد کنید:\n(مثال: 31 برای ۱ ماه)`);
     }
 
@@ -2113,7 +2182,11 @@ bot.on('text', async (ctx) => {
       if (isNaN(validity) || validity < 1) {
         return ctx.reply('❌ مدت نامعتبر است. یک عدد صحیح وارد کنید.');
       }
-      adminState[userId] = { action: 'add_plan_price', name: state.name, gb: state.gb, panel: state.panel, validity };
+      if (state.days && durationBucket(validity) !== state.days) {
+        const [min, max] = durationRange(state.days);
+        return ctx.reply(`❌ این مدت در بخش ${DURATION_LABELS[state.days]} نیست.\nلطفاً عددی بین ${min} تا ${max} روز وارد کنید (یا برگردید و از بخش درست اضافه کنید).`);
+      }
+      adminState[userId] = { action: 'add_plan_price', name: state.name, gb: state.gb, panel: state.panel, validity, days: state.days };
       return ctx.reply(`✅ نام: ${state.name} | حجم: ${state.gb}GB | مدت: ${validity} روز\n\n💰 قیمت (تومان) را وارد کنید:`);
     }
 
@@ -2124,7 +2197,8 @@ bot.on('text', async (ctx) => {
       }
       db.prepare('INSERT INTO plans (name, gb, validity, price, panel) VALUES (?, ?, ?, ?, ?)').run(state.name, state.gb, state.validity, price, state.panel);
       delete adminState[userId];
-      ctx.reply(`✅ پلن ${state.name} با موفقیت اضافه شد.`);
+      const bucketNote = state.days ? ` (بخش ${DURATION_LABELS[state.days]})` : '';
+      ctx.reply(`✅ پلن ${state.name} با موفقیت اضافه شد.${bucketNote}`);
       // Show all plans for this panel
       const plans = db.prepare('SELECT * FROM plans WHERE active = 1 AND panel = ? ORDER BY validity ASC, price ASC').all(state.panel);
       let text = `📦 پلن‌های پنل ${state.panel}\n\n`;
@@ -2891,8 +2965,8 @@ bot.on('text', async (ctx) => {
         [b('🔙 بازگشت', 'buy_sub', 'back')],
       ]));
     }
-    const plan = getPlanByGb(userStateObj.gb, userStateObj.panel);
-    if (!plan) {
+    const plan = getPlanById(userStateObj.planId);
+    if (!plan || !plan.active) {
       delete userState[userId];
       return ctx.reply('❌ پلن یافت نشد.', mainMenu());
     }
@@ -2911,7 +2985,7 @@ bot.on('text', async (ctx) => {
       `💰 قیمت نهایی: *${formatNumber(finalPrice)} تومان*\n` +
       `🔹 موجودی کیف پول شما: ${formatNumber(wallet)} تومان`;
 
-    const payAction = `pay_discount_${plan.gb}_${userStateObj.panel}_${code}`;
+    const payAction = `pay_discount_${plan.id}_${code}`;
     const buttons = [
       [b(`💳 پرداخت ${formatNumber(finalPrice)} تومان`, payAction, 'success')],
       [b('🔙 بازگشت به انتخاب پلن', 'buy_sub', 'backToPlans')],
@@ -3399,7 +3473,7 @@ bot.action(/^service_detail_order_(\d+)$/, async (ctx) => {
       `\n\n⚠️ اطلاعات زنده از پنل دریافت نشد.`;
   }
 
-  const plan = getPlanByGb(order.plan_gb, order.panel || 'pasarguard');
+  const plan = getPlanByGbValidity(order.plan_gb, order.validity, order.panel || 'pasarguard');
   const buttons = [];
 
   if (plan) {
@@ -3479,7 +3553,7 @@ bot.action('renew_service', (ctx) => {
   }
 
   const latest = orders[0];
-  const plan = getPlanByGb(latest.plan_gb, latest.panel || 'pasarguard');
+  const plan = getPlanByGbValidity(latest.plan_gb, latest.validity, latest.panel || 'pasarguard');
   if (!plan) {
     return safeEdit(ctx,'❌ پلن یافت نشد.', mainMenu());
   }
@@ -3499,7 +3573,7 @@ bot.action('renew_service', (ctx) => {
 
   const buttons = [];
   if (canPay) {
-    buttons.push([Markup.button.callback(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `pay_${plan.gb}_${latest.panel || 'pasarguard'}`)]);
+    buttons.push([Markup.button.callback(`💳 تمدید - ${formatNumber(plan.price)} تومان`, `payid_${plan.id}`)]);
   } else {
     buttons.push([b('💰 افزایش موجودی', 'add_balance', 'addBalance')]);
   }
@@ -4370,24 +4444,24 @@ bot.action(/^admin_plans_([\w]+)_(\d+)$/, (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
   const panel = ctx.match[1];
-  const validity = Number(ctx.match[2]);
+  const days = normalizeDuration(ctx.match[2]);
   const panelData = getPanelByName(panel);
-  const panelText = panelData ? panelData.display_name : panel;
-  const monthText = validity === 31 ? '۱ ماهه' : '۲ ماهه';
+  if (!panelData) return safeEdit(ctx, '❌ پنل یافت نشد.', adminMenu());
+  const panelText = panelData.display_name;
 
-  const plans = db.prepare('SELECT * FROM plans WHERE active = 1 AND panel = ? AND validity = ? ORDER BY price ASC').all(panel, validity);
+  const plans = getPlansInBucket(panel, days);
 
-  let text = `📦 *پنل ${panelText} | ${monthText}*\n\n`;
+  let text = `📦 *${panelText} | ${DURATION_LABELS[days]}*\n\n`;
   if (plans.length === 0) {
     text += 'هیچ پلنی وجود ندارد.';
   } else {
     plans.forEach((p) => {
-      text += `▫️ *${escapeMarkdown(p.name)}* | ${p.gb}GB | ${formatNumber(p.price)} تومان\n`;
+      text += `▫️ *${escapeMarkdown(p.name)}* | ${p.gb}GB | ${p.validity} روز | ${formatNumber(p.price)} تومان\n`;
     });
   }
 
   const buttons = [];
-  buttons.push([Markup.button.callback('➕ افزودن پلن جدید', `admin_plan_add_${panel}_${validity}`)]);
+  buttons.push([Markup.button.callback('➕ افزودن پلن جدید', `admin_plan_add_${panel}_${days}`)]);
 
   plans.forEach((p) => {
     buttons.push([
@@ -4409,28 +4483,30 @@ bot.action(/^admin_plans_([\w]+)$/, (ctx) => {
   const panelData = getPanelByName(panel);
   if (!panelData) return safeEdit(ctx, '❌ پنل یافت نشد.', adminMenu());
 
-  // Show all plans directly (no duration selection)
-  const plans = db.prepare('SELECT * FROM plans WHERE active = 1 AND panel = ? ORDER BY validity ASC, price ASC').all(panel);
-  let text = `🔹 *${panelData.display_name}*\n\n${panelData.description || ''}\n\n`;
-  if (plans.length === 0) {
-    text += 'هیچ پلنی وجود ندارد.';
-  } else {
-    plans.forEach((p) => {
-      text += `▫️ *${escapeMarkdown(p.name)}* | ${p.gb}GB | ${p.validity} روز | ${formatNumber(p.price)} تومان\n`;
-    });
-  }
-
-  const buttons = [];
-  buttons.push([Markup.button.callback('➕ افزودن پلن جدید', `admin_plan_add_${panel}`)]);
-  plans.forEach((p) => {
-    buttons.push([
-      Markup.button.callback(`✏️ ${p.name}`, `admin_plan_edit_${p.id}`),
-      Markup.button.callback(`🗑️`, `admin_plan_delete_${p.id}`),
-    ]);
+  // Duration sections overview
+  let text = `📦 *مدیریت پلن‌های ${panelData.display_name}*\n\nبخش زمانی را انتخاب کنید:\n\n`;
+  const buttons = DURATION_OPTIONS.map((d) => {
+    const count = countPlansInBucket(panel, d);
+    return [Markup.button.callback(`🔹 ${DURATION_LABELS[d]} (${count} پلن)`, `admin_plans_${panel}_${d}`)];
   });
+  buttons.push([Markup.button.callback('➕ افزودن پلن جدید', `admin_plan_add_${panel}`)]);
   buttons.push([b('بازگشت ◀️', 'admin_plans', 'back')]);
 
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+bot.action(/^admin_plan_add_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panel = ctx.match[1];
+  const days = normalizeDuration(ctx.match[2]);
+  const panelData = getPanelByName(panel);
+  if (!panelData) return safeEdit(ctx, '❌ پنل یافت نشد.', adminMenu());
+  adminState[ADMIN_ID] = { action: 'add_plan_name_gb', panel, days };
+  safeEdit(ctx, `📦 افزودن پلن جدید در بخش *${DURATION_LABELS[days]}* پنل ${panelData.display_name}\n\nنام و حجم پلن را وارد کنید:\n(مثال: 20GB)`, {
+    parse_mode: 'Markdown',
+    ...Markup.inlineKeyboard([[b('لغو', `admin_plans_${panel}_${days}`, 'back')]]),
+  });
 });
 
 bot.action(/^admin_plan_add_(.+)$/, (ctx) => {
@@ -4731,7 +4807,8 @@ function adminBotSettingsText() {
     `   💳 شماره کارت: ${CARD_NUMBER || '---'}\n` +
     `   👤 نام صاحب کارت: ${CARD_OWNER || '---'}\n` +
     `   💰 حداقل شارژ: ${formatNumber(minCharge)} تومان\n` +
-    `   💰 حداکثر شارژ: ${formatNumber(maxCharge)} تومان\n\n` +
+    `   💰 حداکثر شارژ: ${formatNumber(maxCharge)} تومان\n` +
+    `   ⏳ بخش‌های زمانی: ${DURATION_OPTIONS.map(d => `${DURATION_LABELS[d]}${durationsEnabled[d] ? '✅' : '❌'}`).join(' ')}\n\n` +
     `🌐 *تنظیمات API پنل VPN (سراسری)*\n` +
     `   🔗 آدرس پنل: \`${PANEL_URL}\`\n` +
     `   👤 یوزرنیم: \`${PANEL_USERNAME}\`\n` +
@@ -4753,6 +4830,7 @@ function adminBotSettingsKeyboard() {
     [Markup.button.callback('📌 پاداش دعوت', 'admin_edit_referral')],
     [Markup.button.callback('💳 شماره کارت', 'admin_edit_card_number'), Markup.button.callback('👤 نام صاحب کارت', 'admin_edit_card_owner')],
     [Markup.button.callback('💰 حداقل شارژ', 'admin_edit_min_charge'), Markup.button.callback('💰 حداکثر شارژ', 'admin_edit_max_charge')],
+    [Markup.button.callback('⏳ بخش‌های زمانی (30/60/90 روزه)', 'admin_durations')],
     [Markup.button.callback('👋 پیام خوش‌آمدگویی', 'admin_edit_welcome')],
     [Markup.button.callback('🖼 تصویر خوش‌آمدگویی', 'admin_edit_welcome_image')],
     [Markup.button.callback('📢 پیام عضویت', 'admin_edit_channel_msg')],
@@ -4762,6 +4840,37 @@ function adminBotSettingsKeyboard() {
     [b('بازگشت ◀️', 'back_to_menu', 'back')],
   ]);
 }
+
+function durationsSettingsText() {
+  return `⏳ *بخش‌های زمانی فروش*\n\nهر بخش را فعال یا غیرفعال کنید:\n(پلن‌های فعلی 31 روزه در بخش 30 روزه هستند)`;
+}
+
+function durationsSettingsKeyboard() {
+  const rows = DURATION_OPTIONS.map((d) => [
+    Markup.button.callback(
+      `${DURATION_LABELS[d]}: ${durationsEnabled[d] ? '✅ فعال' : '❌ غیرفعال'}`,
+      `admin_duration_toggle_${d}`
+    ),
+  ]);
+  rows.push([b('بازگشت ◀️', 'admin_bot_settings', 'back')]);
+  return Markup.inlineKeyboard(rows);
+}
+
+bot.action('admin_durations', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  safeEdit(ctx, durationsSettingsText(), { parse_mode: 'Markdown', ...durationsSettingsKeyboard() });
+});
+
+bot.action(/^admin_duration_toggle_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const days = Number(ctx.match[1]);
+  if (!DURATION_OPTIONS.includes(days)) return;
+  durationsEnabled[days] = !durationsEnabled[days];
+  saveSettings();
+  safeEdit(ctx, durationsSettingsText(), { parse_mode: 'Markdown', ...durationsSettingsKeyboard() });
+});
 
 bot.action('admin_bot_settings', async (ctx) => {
   safeAnswer(ctx);
