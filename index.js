@@ -1692,7 +1692,7 @@ bot.action(/^duration_([\w]+)_(\d+)$/, (ctx) => {
     b(`\u200F${formatNumber(p.price)} تومان • ${p.name}`, `planid_${p.id}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', `select_${panelName}`, 'back')]);
-  safeEdit(ctx, `📦 *پلن‌ها*\n\n⏳ مدت انتخاب‌شده: *${DURATION_LABELS[days]}*\n🖥️ پنل انتخاب‌شده: *${escapeMarkdown(panel.display_name)}*\n\nپلن مورد نظر خود را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  safeEdit(ctx, `🧩 *نوع سرویس را انتخاب کن*\n━━━━━━━━━━━━━━━━━━━━\n\n📅 مدت انتخاب‌شده: *${DURATION_LABELS[days]}*\n📊 پنل انتخاب‌شده: *${escapeMarkdown(panel.display_name)}*`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 });
 
 bot.action(/^planid_(\d+)$/, (ctx) => {
