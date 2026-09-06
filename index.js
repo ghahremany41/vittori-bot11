@@ -1661,7 +1661,7 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
     });
   }
   const buttons = enabledDurations.map((d) => [
-    b(`🔹 ${DURATION_LABELS[d]} (${countPlansInBucket(panelName, d)} پلن)`, `duration_${panelName}_${d}`, 'planSelect'),
+    b(`🔹 ${DURATION_LABELS[d]}`, `duration_${panelName}_${d}`, 'planSelect'),
   ]);
   buttons.push([b('بازگشت ◀️', 'buy_sub', 'back')]);
   safeEdit(ctx, `📦 *پلن‌های ${escapeMarkdown(panel.display_name)}*${panelDesc}\n\n⏳ مدت زمان سرویس را انتخاب کنید:`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
