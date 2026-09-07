@@ -3524,17 +3524,38 @@ bot.action(/^service_detail_order_(\d+)$/, async (ctx) => {
       `\n\n⚠️ اطلاعات زنده از پنل دریافت نشد.`;
   }
 
-  const plan = getPlanByGbValidity(order.plan_gb, order.validity, order.panel || 'pasarguard');
   const buttons = [];
 
-  if (plan) {
-    buttons.push([Markup.button.callback(`💳 تمدید سرویس`, 'renew_service')]);
+  if (order.sub_link) {
+    buttons.push([Markup.button.callback('📱 دریافت QR کد', `qr_service_${orderId}`)]);
   }
 
   buttons.push([Markup.button.callback('🗑 حذف سرویس', `delete_service_${order.id}`)]);
   buttons.push([b('بازگشت ◀️', 'my_services', 'back')]);
 
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+// QR code handler - resend the service QR code
+bot.action(/^qr_service_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
+  if (isBanned(ctx.from.id)) return;
+  const orderId = Number(ctx.match[1]);
+
+  const order = db.prepare("SELECT * FROM orders WHERE id = ? AND user_id = ? AND status = 'delivered'").get(orderId, ctx.from.id);
+  if (!order || !order.sub_link) {
+    return safeEdit(ctx, '❌ لینک اشتراک برای این سرویس ثبت نشده است.', mainMenu());
+  }
+
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(order.sub_link)}`;
+  try {
+    await ctx.replyWithPhoto(qrUrl, {
+      caption: `📱 QR کد سرویس: ${escapeMarkdown(order.plan_name)}` + (order.panel_username ? `\n👤 \`${order.panel_username}\`` : ''),
+      parse_mode: 'Markdown',
+    });
+  } catch (e) {
+    return safeEdit(ctx, '❌ خطا در دریافت QR کد. لطفاً دوباره تلاش کنید.');
+  }
 });
 
 // Delete service handler
