@@ -3518,7 +3518,7 @@ bot.action(/^service_detail_order_(\d+)$/, async (ctx) => {
       `${daysPassed} روز از ${order.validity} روز\n\n` +
       `🗜 حجم اشتراک: ${order.plan_gb} گیگابایت\n` +
       `💰 مبلغ پرداختی: ${formatNumber(order.price)} تومان\n` +
-      `🖥 پنل: ${order.panel === 'pasarguard' ? '🔹 پاسارگارد' : '🔹 اکونومیك'}\n` +
+      `🖥 پنل: 🔹 ${escapeMarkdown((getPanelByName(order.panel) || {}).display_name || order.panel || 'نامشخص')}\n` +
       (order.panel_username ? `\n👤 *نام کاربری:* \`${order.panel_username}\`` : '') +
       (order.sub_link ? `\n🔗 لینک اشتراک:\n\`${order.sub_link}\`` : '') +
       `\n\n⚠️ اطلاعات زنده از پنل دریافت نشد.`;
