@@ -3536,11 +3536,13 @@ bot.action(/^service_detail_order_(\d+)$/, async (ctx) => {
 
   const buttons = [];
 
+  // QR + delete side by side in one row (half-width buttons)
+  const actionRow = [];
   if (order.sub_link) {
-    buttons.push([Markup.button.callback('📱 دریافت QR کد', `qr_service_${orderId}`)]);
+    actionRow.push(Markup.button.callback('📱 دریافت QR کد', `qr_service_${orderId}`));
   }
-
-  buttons.push([Markup.button.callback('🗑 حذف سرویس', `delete_service_${order.id}`)]);
+  actionRow.push(Markup.button.callback('🗑 حذف سرویس', `delete_service_${order.id}`));
+  buttons.push(actionRow);
   buttons.push([b('بازگشت ◀️', 'my_services', 'back')]);
 
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
