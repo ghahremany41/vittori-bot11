@@ -3289,6 +3289,48 @@ bot.action('my_services', async (ctx) => {
   }
 });
 
+// Trial detail text in the requested layout (MB + hours, dynamic values).
+// live: null | { volMB, remainMB, remainHours } (numbers, null when unknown)
+function trialDetailText(trial, live) {
+  const vol = live && Number.isFinite(live.volMB) && live.volMB > 0 ? Math.round(live.volMB) : 100;
+  const remainMB = live && Number.isFinite(live.remainMB) && live.remainMB >= 0 ? Math.round(live.remainMB) : null;
+  let remainH = live && Number.isFinite(live.remainHours) ? Math.max(0, Math.ceil(live.remainHours)) : null;
+  if (remainH === null && trial.created_at) {
+    const elapsedH = (Date.now() - new Date(trial.created_at).getTime()) / 3600000;
+    if (isFinite(elapsedH)) remainH = Math.max(0, Math.floor(24 - elapsedH));
+  }
+  const title = `🧪 تست رایگان ${vol} مگابایت - 24 ساعت`;
+  const sep = '━━━━━━━━━━━━━━━━━━━━';
+  const total = `📊 حجم کل: ${vol} مگابایت`;
+  const remain = `📤 حجم باقی‌مانده: ${remainMB !== null ? remainMB + ' مگابایت' : 'نامشخص'}`;
+  const dur = '⏳ مدت سرویس: 24 ساعت';
+  const left = `⌛ زمان باقی‌مانده: ${remainH !== null ? remainH + ' ساعت' : 'نامشخص'}`;
+  const linkLabel = '🔗 لینک اشتراک:';
+  const html =
+    `${escapeHtml(title)}\n${sep}\n` +
+    `${escapeHtml(total)}\n` +
+    `${escapeHtml(remain)}\n` +
+    `${escapeHtml(dur)}\n` +
+    `${escapeHtml(left)}\n\n` +
+    `${escapeHtml(linkLabel)}\n<code>${escapeHtml(trial.sub_link)}</code>`;
+  const markdown =
+    `${title}\n${sep}\n` +
+    `${total}\n` +
+    `${remain}\n` +
+    `${dur}\n` +
+    `${left}\n\n` +
+    `${linkLabel}\n\`${trial.sub_link}\``;
+  return { html, markdown };
+}
+
+// Remaining trial hours from the panel expire timestamp (unix seconds).
+// Returns null when expire is missing/unusable (caller falls back to created_at).
+function trialRemainHours(expire) {
+  const e = Number(expire);
+  if (!expire || !isFinite(e) || e <= 0) return null;
+  return Math.max(0, Math.ceil((e - Date.now() / 1000) / 3600));
+}
+
 // Service detail for free trial
 bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
   if (isBanned(ctx.from.id)) return;
@@ -3302,27 +3344,8 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
     return;
   }
 
-  const panelData = trial.panel ? getPanelByName(trial.panel) : null;
-  const panelLabel = panelData ? panelData.display_name : (trial.panel || 'نامشخص');
-
-  let expireDate = 'نامشخص';
-  let trialEndDate = 'نامشخص';
-  if (trial.created_at) {
-    const d = new Date(trial.created_at);
-    expireDate = d.toLocaleDateString('fa-IR');
-    trialEndDate = new Date(d.getTime() + 24 * 60 * 60 * 1000).toLocaleDateString('fa-IR');
-  }
-
-  // Show basic info immediately (proper HTML - old */` conversion produced
-  // unclosed tags which Telegram rejected, so details never showed)
-  const htmlText =
-    `🎁 <b>تست رایگان #${trial.id}</b>\n━━━━━━━━━━━━━━━━━━\n\n` +
-    (trial.panel_username ? `👤 <b>نام کاربری پنل:</b> <code>${escapeHtml(trial.panel_username)}</code>\n` : '') +
-    `🖥 <b>پنل:</b> ${escapeHtml(panelLabel)}\n` +
-    `📅 تاریخ فعال‌سازی: ${expireDate}\n` +
-    `⏳ انقضا: ${trialEndDate} (۲۴ ساعت)\n` +
-    `🔗 لینک اتصال:\n<code>${escapeHtml(trial.sub_link)}</code>\n\n` +
-    `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
+  // Show basic info immediately
+  const basic = trialDetailText(trial, null);
 
   const buttons = [
     [Markup.button.callback('🔄 بروزرسانی اطلاعات پنل', `refresh_trial_${trialId}`)],
@@ -3332,7 +3355,7 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
   // Always reply (more reliable than edit)
   const options = { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) };
   try { 
-    await ctx.reply(htmlText, options); 
+    await ctx.reply(basic.html, options); 
     console.log('[SERVICE_DETAIL_TRIAL] Basic info sent for trial:', trialId);
   } catch (err) {
     console.error('[SERVICE_DETAIL_TRIAL] Reply failed:', err.message);
@@ -3347,31 +3370,13 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
     ]);
     if (userInfo && userInfo.username) {
-      let remainingGB = 'نامشخص';
-      let remainingTime = 'نامشخص';
-      let usedGB = 'نامشخص';
-
-      if (userInfo.data_limit && userInfo.used_traffic !== undefined) {
-        usedGB = (userInfo.used_traffic / (1024 * 1024 * 1024)).toFixed(2);
-        remainingGB = ((userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024 * 1024)).toFixed(2);
-      }
-      if (userInfo.expire) {
-        const now = Math.floor(Date.now() / 1000);
-        const daysLeft = Math.max(0, Math.ceil((userInfo.expire - now) / 86400));
-        remainingTime = `${daysLeft} روز`;
-      }
-
-      const liveText =
-        `🎁 *تست رایگان #${trial.id}*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `👤 *نام کاربری پنل:* \`${userInfo.username}\`\n` +
-        `🖥 *پنل:* ${escapeMarkdown(panelLabel)}\n` +
-        `📅 تاریخ فعال‌سازی: ${expireDate}\n` +
-        `🔗 لینک اتصال:\n\`${trial.sub_link}\`\n` +
-        `\n📊 *اطلاعات زنده از پنل:*\n` +
-        `   📥 حجم استفاده شده: ${usedGB} GB\n` +
-        `   📤 حجم باقی‌مانده: ${remainingGB} GB\n` +
-        `   ⏰ زمان باقی‌مانده: ${remainingTime}\n\n` +
-        `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
+      const live = {
+        volMB: userInfo.data_limit ? userInfo.data_limit / (1024 * 1024) : null,
+        remainMB: (userInfo.data_limit && userInfo.used_traffic !== undefined)
+          ? Math.max(0, (userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024)) : null,
+        remainHours: trialRemainHours(userInfo.expire),
+      };
+      const liveText = trialDetailText(trial, live).markdown;
 
       await safeEdit(ctx, liveText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
     }
@@ -3400,30 +3405,13 @@ bot.action(/^refresh_trial_(\d+)$/, async (ctx) => {
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
     ]);
     if (userInfo && userInfo.username) {
-      let remainingGB = 'نامشخص';
-      let remainingTime = 'نامشخص';
-      let usedGB = 'نامشخص';
-
-      if (userInfo.data_limit && userInfo.used_traffic !== undefined) {
-        usedGB = (userInfo.used_traffic / (1024 * 1024 * 1024)).toFixed(2);
-        remainingGB = ((userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024 * 1024)).toFixed(2);
-      }
-      if (userInfo.expire) {
-        const now = Math.floor(Date.now() / 1000);
-        const daysLeft = Math.max(0, Math.ceil((userInfo.expire - now) / 86400));
-        remainingTime = `${daysLeft} روز`;
-      }
-
-      const expireDate = trial.created_at ? new Date(trial.created_at).toLocaleDateString('fa-IR') : 'نامشخص';
-      const liveText =
-        `🎁 *تست رایگان #${trial.id}*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `📅 تاریخ فعال‌سازی: ${expireDate}\n` +
-        `🔗 لینک اتصال:\n\`${trial.sub_link}\`\n` +
-        `\n📊 *اطلاعات زنده از پنل:*\n` +
-        `   📥 حجم استفاده شده: ${usedGB} GB\n` +
-        `   📤 حجم باقی‌مانده: ${remainingGB} GB\n` +
-        `   ⏰ زمان باقی‌مانده: ${remainingTime}\n\n` +
-        `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
+      const live = {
+        volMB: userInfo.data_limit ? userInfo.data_limit / (1024 * 1024) : null,
+        remainMB: (userInfo.data_limit && userInfo.used_traffic !== undefined)
+          ? Math.max(0, (userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024)) : null,
+        remainHours: trialRemainHours(userInfo.expire),
+      };
+      const liveText = trialDetailText(trial, live).markdown;
 
       const buttons = [
         [Markup.button.callback('🔄 بروزرسانی', `refresh_trial_${trialId}`)],
