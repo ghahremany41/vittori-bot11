@@ -3313,14 +3313,15 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
     trialEndDate = new Date(d.getTime() + 24 * 60 * 60 * 1000).toLocaleDateString('fa-IR');
   }
 
-  // Show basic info immediately
-  const text =
-    `🎁 *تست رایگان #${trial.id}*\n━━━━━━━━━━━━━━━━━━\n\n` +
-    (trial.panel_username ? `👤 *نام کاربری پنل:* \`${trial.panel_username}\`\n` : '') +
-    `🖥 *پنل:* ${escapeMarkdown(panelLabel)}\n` +
+  // Show basic info immediately (proper HTML - old */` conversion produced
+  // unclosed tags which Telegram rejected, so details never showed)
+  const htmlText =
+    `🎁 <b>تست رایگان #${trial.id}</b>\n━━━━━━━━━━━━━━━━━━\n\n` +
+    (trial.panel_username ? `👤 <b>نام کاربری پنل:</b> <code>${escapeHtml(trial.panel_username)}</code>\n` : '') +
+    `🖥 <b>پنل:</b> ${escapeHtml(panelLabel)}\n` +
     `📅 تاریخ فعال‌سازی: ${expireDate}\n` +
     `⏳ انقضا: ${trialEndDate} (۲۴ ساعت)\n` +
-    `🔗 لینک اتصال:\n\`${trial.sub_link}\`\n\n` +
+    `🔗 لینک اتصال:\n<code>${escapeHtml(trial.sub_link)}</code>\n\n` +
     `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
 
   const buttons = [
@@ -3331,7 +3332,7 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
   // Always reply (more reliable than edit)
   const options = { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) };
   try { 
-    await ctx.reply(text.replace(/\*/g, '<b>').replace(/`/g, '<code>'), options); 
+    await ctx.reply(htmlText, options); 
     console.log('[SERVICE_DETAIL_TRIAL] Basic info sent for trial:', trialId);
   } catch (err) {
     console.error('[SERVICE_DETAIL_TRIAL] Reply failed:', err.message);
