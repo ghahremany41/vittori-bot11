@@ -559,6 +559,14 @@ try {
 } catch (_) {}
 
 try {
+  db.exec(`ALTER TABLE free_trials ADD COLUMN panel TEXT`);
+} catch (_) {}
+
+try {
+  db.exec(`ALTER TABLE free_trials ADD COLUMN panel_username TEXT`);
+} catch (_) {}
+
+try {
   db.exec(`ALTER TABLE plans ADD COLUMN panel TEXT DEFAULT 'pasarguard'`);
 } catch (_) {}
 
@@ -817,9 +825,13 @@ function formatNumber(n) {
 }
 
 function escapeMarkdown(s) {
-  // NOTE: '+' is intentionally NOT escaped — Telegram renders '\+' literally.
+  // NOTE: '+' is intentionally NOT escaped - Telegram renders '\+' literally.
   // A raw '+' never starts Markdown formatting, so leaving it is safe.
   return String(s).replace(/[_*[\]()~`>#\-=|{}.!\\]/g, '\\$&');
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Custom emoji helper for HTML format
@@ -1615,6 +1627,13 @@ bot.action('free_test', async (ctx) => {
           caption: trialMessage,
           parse_mode: 'Markdown',
         });
+
+        // Record the trial so it shows up in "سرویس‌های من" with live details
+        try {
+          db.prepare('INSERT INTO free_trials (sub_link, active, claimed_by, panel, panel_username) VALUES (?, 1, ?, ?, ?)').run(subUrl, ctx.from.id, panel.name, panelUsername);
+        } catch (e) {
+          console.error(`[FREE_TRIAL] DB insert failed for ${panel.name}:`, e.message);
+        }
 
         successCount++;
       } catch (err) {
@@ -3209,12 +3228,17 @@ bot.action('my_services', async (ctx) => {
   try { await ctx.answerCbQuery(); } catch (_) {}
   const userId = ctx.from.id;
 
-  // Get delivered orders only (purchased services)
+  // Purchased services (show panel username as saved on the panel)
   const orders = db.prepare("SELECT * FROM orders WHERE user_id = ? AND status = 'delivered' ORDER BY created_at DESC").all(userId);
+  // Free trials claimed from the bot
+  const trials = db.prepare('SELECT ft.*, p.display_name as panel_display FROM free_trials ft LEFT JOIN panels p ON p.name = ft.panel WHERE ft.claimed_by = ? ORDER BY ft.created_at DESC').all(userId);
 
-  if (orders.length === 0) {
-    const text = '🛍️ شما هنوز سرویسی خریداری نکرده‌اید.';
-    const opts = mainMenu();
+  if (orders.length === 0 && trials.length === 0) {
+    const text = '🛍️ شما هنوز سرویسی ندارید.\n\n🎁 می‌توانید یک تست رایگان دریافت کنید!';
+    const opts = Markup.inlineKeyboard([
+      [b('🎁 تست رایگان', 'free_test', 'trials')],
+      [b('🏠 بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')],
+    ]);
     try { await ctx.reply(text, opts); } catch (_) {}
     return;
   }
@@ -3222,11 +3246,26 @@ bot.action('my_services', async (ctx) => {
   let text = '🛍️ <b>سرویس‌های شما</b>\n\nیک سرویس را انتخاب کنید:';
   const buttons = [];
 
-  // Orders only
-  orders.forEach((o, i) => {
-    const shortName = o.plan_name.length > 25 ? o.plan_name.substring(0, 25) + '…' : o.plan_name;
-    buttons.push([Markup.button.callback(`${i + 1}. ${shortName} | ${o.validity} روز`, `service_detail_order_${o.id}`)]);
-  });
+  if (orders.length > 0) {
+    text += '\n\n🛒 <b>خریداری‌شده:</b>\n';
+    orders.forEach((o, i) => {
+      const svcName = o.panel_username || o.plan_name;
+      text += `${i + 1}. <code>${escapeHtml(svcName)}</code> | ${o.validity} روز\n`;
+      const shortName = svcName.length > 22 ? svcName.substring(0, 22) + '…' : svcName;
+      buttons.push([Markup.button.callback(`${i + 1}. ${shortName} • ${o.validity} روز`, `service_detail_order_${o.id}`)]);
+    });
+  }
+
+  if (trials.length > 0) {
+    text += '\n🎁 <b>تست رایگان:</b>\n';
+    trials.forEach((t, i) => {
+      const svcName = t.panel_username || `#${t.id}`;
+      const panelBit = t.panel_display ? ` (${t.panel_display})` : '';
+      text += `${i + 1}. <code>${escapeHtml(svcName)}</code>${escapeHtml(panelBit)}\n`;
+      const shortName = svcName.length > 24 ? svcName.substring(0, 24) + '…' : svcName;
+      buttons.push([Markup.button.callback(`🎁 ${shortName}`, `service_detail_trial_${t.id}`)]);
+    });
+  }
 
   buttons.push([b('🏠 بازگشت به منوی اصلی ◀️', 'back_to_menu', 'back')]);
 
@@ -3253,21 +3292,28 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
     return;
   }
 
+  const panelData = trial.panel ? getPanelByName(trial.panel) : null;
+  const panelLabel = panelData ? panelData.display_name : (trial.panel || 'نامشخص');
+
   let expireDate = 'نامشخص';
+  let trialEndDate = 'نامشخص';
   if (trial.created_at) {
     const d = new Date(trial.created_at);
     expireDate = d.toLocaleDateString('fa-IR');
+    trialEndDate = new Date(d.getTime() + 24 * 60 * 60 * 1000).toLocaleDateString('fa-IR');
   }
 
   // Show basic info immediately
   const text =
     `🎁 *تست رایگان #${trial.id}*\n━━━━━━━━━━━━━━━━━━\n\n` +
+    (trial.panel_username ? `👤 *نام کاربری پنل:* \`${trial.panel_username}\`\n` : '') +
+    `🖥 *پنل:* ${escapeMarkdown(panelLabel)}\n` +
     `📅 تاریخ فعال‌سازی: ${expireDate}\n` +
+    `⏳ انقضا: ${trialEndDate} (۲۴ ساعت)\n` +
     `🔗 لینک اتصال:\n\`${trial.sub_link}\`\n\n` +
     `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
 
   const buttons = [
-    [Markup.button.callback('📋 کپی لینک', `copy_link_${trial.sub_link}`)],
     [Markup.button.callback('🔄 بروزرسانی اطلاعات پنل', `refresh_trial_${trialId}`)],
     [b('بازگشت ◀️', 'my_services', 'back')],
   ];
@@ -3283,12 +3329,13 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
 
   // Try to fetch live info in background
   try {
-    const panelName = 'pasarguard'; // Default panel for free trial
+    const panelName = trial.panel || 'pasarguard';
+    const lookupUsername = trial.panel_username || ('ft' + ctx.from.id);
     const userInfo = await Promise.race([
-      panelApi(panelName, 'GET', '/user/ft' + ctx.from.id),
+      fetchPanelUserInfo(panelName, lookupUsername),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
     ]);
-    if (userInfo) {
+    if (userInfo && userInfo.username) {
       let remainingGB = 'نامشخص';
       let remainingTime = 'نامشخص';
       let usedGB = 'نامشخص';
@@ -3297,7 +3344,7 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
         usedGB = (userInfo.used_traffic / (1024 * 1024 * 1024)).toFixed(2);
         remainingGB = ((userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024 * 1024)).toFixed(2);
       }
-      if (created.expire) {
+      if (userInfo.expire) {
         const now = Math.floor(Date.now() / 1000);
         const daysLeft = Math.max(0, Math.ceil((userInfo.expire - now) / 86400));
         remainingTime = `${daysLeft} روز`;
@@ -3305,6 +3352,8 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
 
       const liveText =
         `🎁 *تست رایگان #${trial.id}*\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `👤 *نام کاربری پنل:* \`${userInfo.username}\`\n` +
+        `🖥 *پنل:* ${escapeMarkdown(panelLabel)}\n` +
         `📅 تاریخ فعال‌سازی: ${expireDate}\n` +
         `🔗 لینک اتصال:\n\`${trial.sub_link}\`\n` +
         `\n📊 *اطلاعات زنده از پنل:*\n` +
@@ -3333,12 +3382,13 @@ bot.action(/^refresh_trial_(\d+)$/, async (ctx) => {
   await safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'my_services', 'back')]]) });
 
   try {
-    const panelName = 'pasarguard'; // Default panel for free trial
+    const panelName = trial.panel || 'pasarguard';
+    const lookupUsername = trial.panel_username || ('ft' + ctx.from.id);
     const userInfo = await Promise.race([
-      panelApi(panelName, 'GET', '/user/ft' + ctx.from.id),
+      fetchPanelUserInfo(panelName, lookupUsername),
       new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
     ]);
-    if (userInfo) {
+    if (userInfo && userInfo.username) {
       let remainingGB = 'نامشخص';
       let remainingTime = 'نامشخص';
       let usedGB = 'نامشخص';
@@ -3347,7 +3397,7 @@ bot.action(/^refresh_trial_(\d+)$/, async (ctx) => {
         usedGB = (userInfo.used_traffic / (1024 * 1024 * 1024)).toFixed(2);
         remainingGB = ((userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024 * 1024)).toFixed(2);
       }
-      if (created.expire) {
+      if (userInfo.expire) {
         const now = Math.floor(Date.now() / 1000);
         const daysLeft = Math.max(0, Math.ceil((userInfo.expire - now) / 86400));
         remainingTime = `${daysLeft} روز`;
@@ -3365,7 +3415,6 @@ bot.action(/^refresh_trial_(\d+)$/, async (ctx) => {
         `📱 برای اتصال از کلاینت‌های V2Ray استفاده کنید.`;
 
       const buttons = [
-        [Markup.button.callback('📋 کپی لینک', `copy_link_${trial.sub_link}`)],
         [Markup.button.callback('🔄 بروزرسانی', `refresh_trial_${trialId}`)],
         [b('بازگشت ◀️', 'my_services', 'back')],
       ];
