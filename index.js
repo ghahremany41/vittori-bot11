@@ -635,6 +635,9 @@ let buttonColors = {
   wallet: 'default',
   referral: 'default',
   support: 'default',
+  // My services list
+  serviceItem: 'default',
+  trialItem: 'default',
   // Buy flow
   panelSelect: 'primary',
   planSelect: 'success',
@@ -1354,6 +1357,7 @@ bot.action('admin_color_settings', (ctx) => {
     users: '👥 کاربران', search: '🔍 جستجو', broadcast: '📢 پیام همگانی', botStatus: '🟢/🔴 وضعیت ربات',
     buy: '🔐 خرید سرویس', myServices: '🛍️ سرویس‌های من',
     wallet: '🏦 کیف پول', referral: '👥 دعوت دوستان', support: '👤 پشتیبانی',
+    serviceItem: '🛍️ آیتم سرویس', trialItem: '🎁 آیتم تست',
     panelSelect: '🔹 انتخاب پنل', planSelect: '📦 انتخاب پلن', payment: '💳 پرداخت',
     addBalance: '➕ افزایش موجودی',
     chargeConfirm: '✅ تایید شارژ', chargeReject: '❌ رد شارژ',
@@ -1387,6 +1391,9 @@ bot.action('admin_color_settings', (ctx) => {
       // Buy flow section
       [{ text: '── فرآیند خرید ──', callback_data: 'noop' }],
       [mkBtn('panelSelect'), mkBtn('planSelect')],
+      // My services section
+      [{ text: '── سرویس‌های من ──', callback_data: 'noop' }],
+      [mkBtn('serviceItem'), mkBtn('trialItem')],
       // Wallet section
       [{ text: '── کیف پول ──', callback_data: 'noop' }],
       [mkBtn('addBalance')],
@@ -1455,6 +1462,7 @@ bot.action(/^admin_set_color_(\w+)$/, (ctx) => {
     // User menu
     buy: 'خرید سرویس', myServices: 'سرویس‌های من',
     wallet: 'کیف پول', referral: 'دعوت دوستان', support: 'پشتیبانی',
+    serviceItem: 'آیتم سرویس', trialItem: 'آیتم تست',
     // Buy flow
     panelSelect: 'انتخاب پنل', planSelect: 'انتخاب پلن', payment: 'پرداخت',
     // Wallet
@@ -1490,12 +1498,14 @@ bot.action(/^admin_pick_color_(\w+)_(\w+)$/, (ctx) => {
     // User menu
     buy: 'خرید سرویس', myServices: 'سرویس‌های من',
     wallet: 'کیف پول', referral: 'دعوت دوستان', support: 'پشتیبانی',
+    serviceItem: 'آیتم سرویس', trialItem: 'آیتم تست',
     // Buy flow
     panelSelect: 'انتخاب پنل', planSelect: 'انتخاب پلن', payment: 'پرداخت',
     // Wallet
     addBalance: 'افزایش موجودی',
     // Admin actions
     chargeConfirm: 'تایید شارژ', chargeReject: 'رد شارژ',
+    discount: 'کد تخفیف', settings: 'تنظیمات',
     // Common
     back: 'بازگشت', toggle: 'تغییر وضعیت', delete: 'حذف', edit: 'ویرایش',
   };
@@ -3252,7 +3262,7 @@ bot.action('my_services', async (ctx) => {
       const svcName = o.panel_username || o.plan_name;
       text += `${i + 1}. <code>${escapeHtml(svcName)}</code> | ${o.validity} روز\n`;
       const shortName = svcName.length > 22 ? svcName.substring(0, 22) + '…' : svcName;
-      buttons.push([Markup.button.callback(`${i + 1}. ${shortName} • ${o.validity} روز`, `service_detail_order_${o.id}`)]);
+      buttons.push([b(`${i + 1}. ${shortName} • ${o.validity} روز`, `service_detail_order_${o.id}`, 'serviceItem')]);
     });
   }
 
@@ -3263,7 +3273,7 @@ bot.action('my_services', async (ctx) => {
       const panelBit = t.panel_display ? ` (${t.panel_display})` : '';
       text += `${i + 1}. <code>${escapeHtml(svcName)}</code>${escapeHtml(panelBit)}\n`;
       const shortName = svcName.length > 24 ? svcName.substring(0, 24) + '…' : svcName;
-      buttons.push([Markup.button.callback(`🎁 ${shortName}`, `service_detail_trial_${t.id}`)]);
+      buttons.push([b(`🎁 ${shortName}`, `service_detail_trial_${t.id}`, 'trialItem')]);
     });
   }
 
