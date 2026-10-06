@@ -3240,8 +3240,8 @@ bot.action('my_services', async (ctx) => {
 
   // Purchased services (show panel username as saved on the panel)
   const orders = db.prepare("SELECT * FROM orders WHERE user_id = ? AND status = 'delivered' ORDER BY created_at DESC").all(userId);
-  // Free trials claimed from the bot
-  const trials = db.prepare('SELECT ft.*, p.display_name as panel_display FROM free_trials ft LEFT JOIN panels p ON p.name = ft.panel WHERE ft.claimed_by = ? ORDER BY ft.created_at DESC').all(userId);
+  // Free trials claimed from the bot (expired/exhausted ones are auto-deactivated)
+  const trials = db.prepare('SELECT ft.*, p.display_name as panel_display FROM free_trials ft LEFT JOIN panels p ON p.name = ft.panel WHERE ft.claimed_by = ? AND ft.active = 1 ORDER BY ft.created_at DESC').all(userId);
 
   if (orders.length === 0 && trials.length === 0) {
     const text = '🛍️ شما هنوز سرویسی ندارید.\n\n🎁 می‌توانید یک تست رایگان دریافت کنید!';
@@ -3343,6 +3343,10 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
     try { await ctx.reply(msg); } catch (_) {}
     return;
   }
+  if (trial.active !== 1) {
+    try { await ctx.reply('⌛ این تست رایگان منقضی شده و از فهرست حذف شده است.'); } catch (_) {}
+    return;
+  }
 
   // Show basic info immediately
   const basic = trialDetailText(trial, null);
@@ -3393,6 +3397,7 @@ bot.action(/^refresh_trial_(\d+)$/, async (ctx) => {
 
   const trial = db.prepare('SELECT * FROM free_trials WHERE id = ? AND claimed_by = ?').get(trialId, ctx.from.id);
   if (!trial) return safeEdit(ctx, '❌ تست رایگان یافت نشد.', mainMenu());
+  if (trial.active !== 1) return safeEdit(ctx, '⌛ این تست رایگان منقضی شده و از فهرست حذف شده است.', mainMenu());
 
   const text = `🔄 در حال دریافت اطلاعات زنده...`;
   await safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'my_services', 'back')]]) });
@@ -5311,6 +5316,61 @@ bot.action('admin_quick_test', async (ctx) => {
   }
   adminQuickPanel(ctx);
 });
+
+// === Auto-cleanup of free trials ===
+// Removes finished trials (24h passed OR traffic exhausted OR panel user gone)
+// from the panel AND from "سرویس‌های من" automatically.
+function trialTimestampMs(ts) {
+  if (!ts) return null;
+  let s = String(ts).trim();
+  if (!(/[zZ]$/.test(s) || /[+-]\d\d:?\d\d$/.test(s))) s = s.replace(' ', 'T') + 'Z';
+  const ms = new Date(s).getTime();
+  return isFinite(ms) ? ms : null;
+}
+
+async function cleanupFreeTrials() {
+  const now = Date.now();
+  const trials = db.prepare('SELECT * FROM free_trials WHERE active = 1 AND claimed_by IS NOT NULL').all();
+  for (const t of trials) {
+    const createdMs = trialTimestampMs(t.created_at);
+    const past24h = createdMs !== null && now - createdMs > 24 * 3600 * 1000;
+    let finished = past24h;
+    let userExistsOnPanel = false;
+
+    if (t.panel && t.panel_username && !finished) {
+      try {
+        const info = await panelApi(t.panel, 'GET', `/user/${t.panel_username}`);
+        if (info && info.username) {
+          userExistsOnPanel = true;
+          const nowSec = Math.floor(now / 1000);
+          const exp = Number(info.expire);
+          const expired = Number.isFinite(exp) && exp > 0 && exp <= nowSec;
+          const exhausted = Number(info.data_limit) > 0 && Number(info.used_traffic) >= Number(info.data_limit);
+          if (expired || exhausted) finished = true;
+        } else {
+          finished = true; // panel answered but user is already gone
+        }
+      } catch (_) {
+        // panel unreachable - only the hard 24h fallback applies
+      }
+    }
+
+    if (!finished) continue;
+
+    if ((userExistsOnPanel || past24h) && t.panel && t.panel_username) {
+      try { await panelApi(t.panel, 'DELETE', `/user/${t.panel_username}`); } catch (_) {}
+    }
+    try {
+      db.prepare('UPDATE free_trials SET active = 0 WHERE id = ?').run(t.id);
+      console.log(`[TRIAL_CLEANUP] Trial #${t.id} finished -> removed from panel + my_services`);
+    } catch (e) {
+      console.error('[TRIAL_CLEANUP] db update failed:', e.message);
+    }
+  }
+}
+
+setInterval(() => { cleanupFreeTrials().catch(e => console.error('[TRIAL_CLEANUP]', e.message)); }, 5 * 60 * 1000);
+setTimeout(() => { cleanupFreeTrials().catch(e => console.error('[TRIAL_CLEANUP]', e.message)); }, 30 * 1000);
 
 bot.launch();
 console.log('🤖 Bot is running...');
