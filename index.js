@@ -3359,7 +3359,7 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
   const basic = trialDetailText(trial, null);
 
   const buttons = [
-    [Markup.button.callback('🔄 بروزرسانی اطلاعات پنل', `refresh_trial_${trialId}`)],
+    [Markup.button.callback('📱 دریافت QR کد', `qr_trial_${trialId}`)],
     [b('بازگشت ◀️', 'my_services', 'back')],
   ];
 
@@ -3396,44 +3396,25 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
   }
 });
 
-// Refresh trial info handler
-bot.action(/^refresh_trial_(\d+)$/, async (ctx) => {
-  safeAnswer(ctx, '🔄 در حال بروزرسانی...');
+// QR code handler for free trial - resend the trial QR code
+bot.action(/^qr_trial_(\d+)$/, async (ctx) => {
+  safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
   const trialId = Number(ctx.match[1]);
 
   const trial = db.prepare('SELECT * FROM free_trials WHERE id = ? AND claimed_by = ?').get(trialId, ctx.from.id);
-  if (!trial) return safeEdit(ctx, '❌ تست رایگان یافت نشد.', mainMenu());
-  if (trial.active !== 1) return safeEdit(ctx, '⌛ این تست رایگان منقضی شده و از فهرست حذف شده است.', mainMenu());
+  if (!trial || !trial.sub_link) {
+    return safeEdit(ctx, '❌ لینک اشتراک برای این تست ثبت نشده است.', mainMenu());
+  }
 
-  const text = `🔄 در حال دریافت اطلاعات زنده...`;
-  await safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'my_services', 'back')]]) });
-
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(trial.sub_link)}`;
   try {
-    const panelName = trial.panel || 'pasarguard';
-    const lookupUsername = trial.panel_username || ('ft' + ctx.from.id);
-    const userInfo = await Promise.race([
-      fetchPanelUserInfo(panelName, lookupUsername),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 8000))
-    ]);
-    if (userInfo && userInfo.username) {
-      const live = {
-        volMB: userInfo.data_limit ? userInfo.data_limit / (1024 * 1024) : null,
-        remainMB: (userInfo.data_limit && userInfo.used_traffic !== undefined)
-          ? Math.max(0, (userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024)) : null,
-        remainHours: trialRemainHours(userInfo.expire),
-      };
-      const liveText = trialDetailText(trial, live).markdown;
-
-      const buttons = [
-        [Markup.button.callback('🔄 بروزرسانی', `refresh_trial_${trialId}`)],
-        [b('بازگشت ◀️', 'my_services', 'back')],
-      ];
-
-      return safeEdit(ctx, liveText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
-    }
-  } catch (err) {
-    return safeEdit(ctx, `❌ خطا در دریافت اطلاعات.\n\n🔗 لینک:\n\`${trial.sub_link}\``, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('بازگشت ◀️', 'my_services', 'back')]]) });
+    await ctx.replyWithPhoto(qrUrl, {
+      caption: `📱 QR کد تست رایگان` + (trial.panel_username ? `\n👤 \`${trial.panel_username}\`` : ''),
+      parse_mode: 'Markdown',
+    });
+  } catch (e) {
+    return safeEdit(ctx, '❌ خطا در دریافت QR کد. لطفاً دوباره تلاش کنید.');
   }
 });
 
