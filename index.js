@@ -2109,13 +2109,17 @@ bot.on('text', async (ctx) => {
       }
       delete adminState[userId];
       ctx.reply(`✅ تست رایگان جدید اضافه شد.`);
-      // Re-show free trials list
-      const trials = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+      // Re-show free trials list (limited to avoid message-too-long errors)
+      const allTrials = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+      const MAX_TRIALS = 15;
+      const trials = allTrials.slice(0, MAX_TRIALS);
+      const extraCount = allTrials.length - trials.length;
       let text = '🎁 مدیریت تست رایگان\n\n';
       trials.forEach((t) => {
         const status = t.claimed_by ? `📨 @${t.username || t.claimed_by}` : (t.active ? '✅ موجود' : '❌ غیرفعال');
         text += `#${t.id} | ${status}\n   🔗 \`${t.sub_link.substring(0, 35)}${t.sub_link.length > 35 ? '...' : ''}\`\n`;
       });
+      if (extraCount > 0) text += `\n... و ${extraCount} مورد قدیمی‌تر`;
       const buttons = [[Markup.button.callback('➕ افزودن تست جدید', 'admin_add_trial')]];
       trials.forEach((t) => {
         buttons.push([
@@ -4705,16 +4709,20 @@ bot.action(/^admin_plan_toggle_(\d+)$/, (ctx) => {
 bot.action('admin_free_trials', async (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
-  const trials = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+  const allTrials = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+  const MAX_TRIALS = 15;
+  const trials = allTrials.slice(0, MAX_TRIALS);
+  const extraCount = allTrials.length - trials.length;
 
   let text = '🎁 مدیریت تست رایگان\n\n';
-  if (trials.length === 0) {
+  if (allTrials.length === 0) {
     text += 'هیچ تست رایگانی وجود ندارد.';
   } else {
     trials.forEach((t) => {
       const status = t.claimed_by ? `📨 @${t.username || t.claimed_by}` : (t.active ? '✅ موجود' : '❌ غیرفعال');
       text += `#${t.id} | ${status}\n   🔗 \`${t.sub_link.substring(0, 35)}${t.sub_link.length > 35 ? '...' : ''}\`\n`;
     });
+    if (extraCount > 0) text += `\n... و ${extraCount} مورد قدیمی‌تر (از بازگشت نشان داده نمی‌شود)`;
   }
 
   const claimedCount = db.prepare('SELECT COUNT(*) as c FROM free_trials WHERE claimed_by IS NOT NULL').get().c;
@@ -4798,16 +4806,20 @@ bot.action(/^admin_toggle_trial_(\d+)$/, (ctx) => {
   db.prepare('UPDATE free_trials SET active = ? WHERE id = ?').run(newStatus, trialId);
   const statusText = newStatus ? 'فعال' : 'غیرفعال';
   ctx.reply(`✅ تست #${trialId} ${statusText} شد.`);
-  // Re-show the list
-  const trials = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+  // Re-show the list (limited to avoid message-too-long errors)
+  const allTrialsT = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+  const MAX_TRIALS_T = 15;
+  const trials = allTrialsT.slice(0, MAX_TRIALS_T);
+  const extraCountT = allTrialsT.length - trials.length;
   let text = '🎁 مدیریت تست رایگان\n\n';
-  if (trials.length === 0) {
+  if (allTrialsT.length === 0) {
     text += 'هیچ تست رایگانی وجود ندارد.';
   } else {
     trials.forEach((t) => {
       const status = t.claimed_by ? `📨 @${t.username || t.claimed_by}` : (t.active ? '✅ موجود' : '❌ غیرفعال');
       text += `#${t.id} | ${status}\n   🔗 \`${t.sub_link.substring(0, 35)}${t.sub_link.length > 35 ? '...' : ''}\`\n`;
     });
+    if (extraCountT > 0) text += `\n... و ${extraCountT} مورد قدیمی‌تر`;
   }
   const buttons = [[Markup.button.callback('➕ افزودن تست جدید', 'admin_add_trial')]];
   trials.forEach((t) => {
@@ -4828,16 +4840,20 @@ bot.action(/^admin_delete_trial_(\d+)$/, (ctx) => {
 
   db.prepare('DELETE FROM free_trials WHERE id = ?').run(trialId);
   ctx.reply(`🗑️ تست #${trialId} حذف شد.`);
-  // Re-show the list
-  const trials = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+  // Re-show the list (limited to avoid message-too-long errors)
+  const allTrialsD = db.prepare('SELECT ft.*, u.username FROM free_trials ft LEFT JOIN users u ON ft.claimed_by = u.user_id ORDER BY ft.created_at DESC').all();
+  const MAX_TRIALS_D = 15;
+  const trials = allTrialsD.slice(0, MAX_TRIALS_D);
+  const extraCountD = allTrialsD.length - trials.length;
   let text = '🎁 مدیریت تست رایگان\n\n';
-  if (trials.length === 0) {
+  if (allTrialsD.length === 0) {
     text += 'هیچ تست رایگانی وجود ندارد.';
   } else {
     trials.forEach((t) => {
       const status = t.claimed_by ? `📨 @${t.username || t.claimed_by}` : (t.active ? '✅ موجود' : '❌ غیرفعال');
       text += `#${t.id} | ${status}\n   🔗 \`${t.sub_link.substring(0, 35)}${t.sub_link.length > 35 ? '...' : ''}\`\n`;
     });
+    if (extraCountD > 0) text += `\n... و ${extraCountD} مورد قدیمی‌تر`;
   }
   const buttons = [[Markup.button.callback('➕ افزودن تست جدید', 'admin_add_trial')]];
   trials.forEach((t) => {
