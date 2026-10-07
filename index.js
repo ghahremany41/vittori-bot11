@@ -1885,7 +1885,7 @@ bot.action('add_balance', (ctx) => {
   if (isBanned(ctx.from.id)) return;
   userState[ctx.from.id] = 'wait_amount';
   safeEdit(ctx,
-    '💰 مبلغ مورد نظر برای شارژ را وارد کنید:\n' + `min: ${formatNumber(minCharge)} | max: ${formatNumber(maxCharge)} تومان)`,
+    `💰 مبلغ مورد نظر برای شارژ را وارد کنید:\nحداقل: ${formatNumber(minCharge)} تومان\nحاکثر: ${formatNumber(maxCharge)} تومان`,
     Markup.inlineKeyboard([[b('بازگشت ◀️', 'back_to_menu', 'back')]])
   );
 });
@@ -3053,6 +3053,10 @@ bot.on('text', async (ctx) => {
       `⚠️ لطفاً تصویر فیش واریزی را ارسال کنید.`;
 
     const buttons = [
+      [
+        Markup.button.switchInline(`📋 کپی مبلغ (${formatNumber(amount)} تومان)`, String(amount)),
+        Markup.button.switchInline('💳 کپی شماره کارت', CARD_NUMBER || ''),
+      ],
       [b('لغو', 'cancel_charge', 'back')],
     ];
 
