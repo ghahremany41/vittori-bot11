@@ -3346,33 +3346,22 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
 
   const trial = db.prepare('SELECT * FROM free_trials WHERE id = ? AND claimed_by = ?').get(trialId, ctx.from.id);
   if (!trial) {
-    const msg = '❌ تست رایگان یافت نشد.';
-    try { await ctx.reply(msg); } catch (_) {}
-    return;
+    return safeEdit(ctx, '❌ تست رایگان یافت نشد.', mainMenu());
   }
   if (trial.active !== 1) {
-    try { await ctx.reply('⌛ این تست رایگان منقضی شده و از فهرست حذف شده است.'); } catch (_) {}
-    return;
+    return safeEdit(ctx, '⌛ این تست رایگان منقضی شده و از فهرست حذف شده است.', mainMenu());
   }
-
-  // Show basic info immediately
-  const basic = trialDetailText(trial, null);
 
   const buttons = [
     [Markup.button.callback('📱 دریافت QR کد', `qr_trial_${trialId}`)],
     [b('بازگشت ◀️', 'my_services', 'back')],
   ];
 
-  // Always reply (more reliable than edit)
-  const options = { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) };
-  try { 
-    await ctx.reply(basic.html, options); 
-    console.log('[SERVICE_DETAIL_TRIAL] Basic info sent for trial:', trialId);
-  } catch (err) {
-    console.error('[SERVICE_DETAIL_TRIAL] Reply failed:', err.message);
-  }
+  // Show basic info immediately by editing the list message (single message, no duplicate)
+  safeEdit(ctx, trialDetailText(trial, null).html, { parse_mode: 'HTML', ...Markup.inlineKeyboard(buttons) });
+  console.log('[SERVICE_DETAIL_TRIAL] Basic info shown for trial:', trialId);
 
-  // Try to fetch live info in background
+  // Fetch live info in background and update the SAME message
   try {
     const panelName = trial.panel || 'pasarguard';
     const lookupUsername = trial.panel_username || ('ft' + ctx.from.id);
@@ -3387,9 +3376,7 @@ bot.action(/^service_detail_trial_(\d+)$/, async (ctx) => {
           ? Math.max(0, (userInfo.data_limit - userInfo.used_traffic) / (1024 * 1024)) : null,
         remainHours: trialRemainHours(userInfo.expire),
       };
-      const liveText = trialDetailText(trial, live).markdown;
-
-      await safeEdit(ctx, liveText, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+      safeEdit(ctx, trialDetailText(trial, live).markdown, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
     }
   } catch (err) {
     // Silent fail - basic info already shown
