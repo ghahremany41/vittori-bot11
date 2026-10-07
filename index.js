@@ -1004,14 +1004,17 @@ function adminMenu() {
       b(`📦 مدیریت پلن‌ها`, 'admin_plans', 'plans'),
     ],
     [
+      b(`🎁 تست رایگان (${totalTrials})`, 'admin_free_trials', 'trials'),
       b(`💰 شارژها (${pendingCharges})`, 'admin_charges', 'charges'),
-      b(`👥 کاربران (${totalUsers})`, 'admin_users', 'users'),
     ],
     [
+      b(`👥 کاربران (${totalUsers})`, 'admin_users', 'users'),
       b(`🔍 جستجوی کاربر`, 'admin_search_user', 'search'),
-      b(`📢 پیام همگانی`, 'admin_broadcast', 'broadcast'),
     ],
-    [b(`${botStatus}`, 'admin_toggle_bot', 'botStatus')],
+    [
+      b(`📢 پیام همگانی`, 'admin_broadcast', 'broadcast'),
+      b(`${botStatus}`, 'admin_toggle_bot', 'botStatus'),
+    ],
     [b('⚙️ تنظیمات ربات', 'admin_bot_settings', 'settings')],
     [b('🎨 تنظیمات رنگ دکمه‌ها', 'admin_color_settings', 'toggle')],
     [b('💾 بکاپ کامل', 'admin_backup', 'settings')],
