@@ -3054,8 +3054,8 @@ bot.on('text', async (ctx) => {
 
     const buttons = [
       [
-        Markup.button.switchInline(`📋 کپی مبلغ (${formatNumber(amount)} تومان)`, String(amount)),
-        Markup.button.switchInline('💳 کپی شماره کارت', CARD_NUMBER || ''),
+        Markup.button.switchToChat(`📋 کپی مبلغ (${formatNumber(amount)} تومان)`, String(amount)),
+        Markup.button.switchToChat('💳 کپی شماره کارت', CARD_NUMBER || ''),
       ],
       [b('لغو', 'cancel_charge', 'back')],
     ];
