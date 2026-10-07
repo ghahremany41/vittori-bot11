@@ -4714,9 +4714,14 @@ bot.action('admin_free_trials', async (ctx) => {
     });
   }
 
+  const claimedCount = db.prepare('SELECT COUNT(*) as c FROM free_trials WHERE claimed_by IS NOT NULL').get().c;
+
   const buttons = [
     [Markup.button.callback('➕ افزودن تست جدید', 'admin_add_trial')],
   ];
+  if (claimedCount > 0) {
+    buttons.push([Markup.button.callback(`🗑 حذف همه تست‌های گرفته‌شده (${claimedCount})`, 'admin_purge_trials')]);
+  }
 
   if (trials.length > 0) {
     trials.forEach((t) => {
@@ -4733,6 +4738,38 @@ bot.action('admin_free_trials', async (ctx) => {
   } catch (_) {
     await ctx.reply(text, Markup.inlineKeyboard(buttons));
   }
+});
+
+bot.action('admin_purge_trials', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const count = db.prepare('SELECT COUNT(*) as c FROM free_trials WHERE claimed_by IS NOT NULL').get().c;
+  if (count === 0) return safeEdit(ctx, 'هیچ تست گرفته‌شده‌ای وجود ندارد.', mainMenu());
+  safeEdit(ctx,
+    `⚠️ تأیید حذف\n\n${count} تست رایگان گرفته‌شده حذف شود؟\n\n(از لیست «سرویس‌های من» کاربران پاک و تلاش می‌شود از پنل هم حذف شود)`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback('✅ بله، حذف کن', 'admin_purge_trials_confirm')],
+      [b('انصراف ◀️', 'admin_free_trials', 'back')],
+    ])
+  );
+});
+
+bot.action('admin_purge_trials_confirm', async (ctx) => {
+  safeAnswer(ctx, 'در حال حذف...');
+  if (ctx.from.id !== ADMIN_ID) return;
+  const trials = db.prepare('SELECT * FROM free_trials WHERE claimed_by IS NOT NULL').all();
+  let panelOk = 0;
+  for (const t of trials) {
+    if (t.panel && t.panel_username) {
+      try { await panelApi(t.panel, 'DELETE', `/user/${t.panel_username}`); panelOk++; } catch (_) {}
+    }
+  }
+  const res = db.prepare('DELETE FROM free_trials WHERE claimed_by IS NOT NULL').run();
+  console.log(`[ADMIN] Purged ${res.changes} claimed trials (panel delete ok: ${panelOk})`);
+  safeEdit(ctx,
+    `✅ حذف انجام شد\n\n🗑 ${res.changes} تست گرفته‌شده از دیتابیس حذف شد\n🖥 ${panelOk} مورد از پنل حذف شد`,
+    Markup.inlineKeyboard([[b('بازگشت ◀️', 'admin_free_trials', 'back')]])
+  );
 });
 
 bot.action('admin_add_trial', (ctx) => {
