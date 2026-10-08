@@ -3054,8 +3054,8 @@ bot.on('text', async (ctx) => {
 
     const buttons = [
       [
-        { text: '📋 کپی مبلغ', copy_text: { text: String(amount) } },
-        { text: '💳 کپی شماره کارت', copy_text: { text: CARD_NUMBER || '' } },
+        { text: 'کپی مبلغ', copy_text: { text: String(Number(amount) * 10) } },
+        { text: 'کپی شماره کارت', copy_text: { text: CARD_NUMBER || '' } },
       ],
       [b('لغو', 'cancel_charge', 'back')],
     ];
