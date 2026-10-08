@@ -3054,8 +3054,8 @@ bot.on('text', async (ctx) => {
 
     const buttons = [
       [
-        Markup.button.switchToCurrentChat(`📋 کپی مبلغ (${formatNumber(amount)} تومان)`, String(amount)),
-        Markup.button.switchToCurrentChat('💳 کپی شماره کارت', CARD_NUMBER || ''),
+        { text: `📋 کپی مبلغ (${formatNumber(amount)} تومان)`, copy_text: { text: String(amount) } },
+        { text: '💳 کپی شماره کارت', copy_text: { text: CARD_NUMBER || '' } },
       ],
       [b('لغو', 'cancel_charge', 'back')],
     ];
