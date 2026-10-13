@@ -584,6 +584,20 @@ try { db.exec(`ALTER TABLE panels ADD COLUMN group_ids TEXT`); } catch (_) {}
 db.prepare("UPDATE plans SET panel = 'pasarguard' WHERE panel = 'pasargad'").run();
 db.prepare("UPDATE orders SET panel = 'pasarguard' WHERE panel = 'pasargad'").run();
 
+// Custom (per-GB) pricing: admin sets a price-per-GB + min/max for each panel+duration bucket.
+// Users can then type their own volume and get a price = price_per_gb * gb.
+db.exec(`CREATE TABLE IF NOT EXISTS custom_pricing (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  panel TEXT NOT NULL,
+  bucket INTEGER NOT NULL,
+  price_per_gb INTEGER NOT NULL DEFAULT 0,
+  min_gb REAL NOT NULL DEFAULT 1,
+  max_gb REAL NOT NULL DEFAULT 100,
+  validity INTEGER NOT NULL,
+  active INTEGER DEFAULT 1,
+  UNIQUE(panel, bucket)
+)`);
+
 function showPlanList(ctx, panel) {
   const panelData = getPanelByName(panel);
   const panelText = panelData ? panelData.display_name : panel;
@@ -764,6 +778,11 @@ try {
     const deleteRes = db.prepare(`DELETE FROM plans WHERE panel NOT IN (${activePanels.map(() => '?').join(',')})`).run(...activePanels);
     console.log(`[CLEANUP] Removed ${deleteRes.changes} orphan plans (panel deleted but plans remained)`);
   }
+  const orphanCp = db.prepare(`SELECT * FROM custom_pricing WHERE panel NOT IN (${activePanels.map(() => '?').join(',')})`).all(...activePanels);
+  if (orphanCp.length > 0) {
+    const delCp = db.prepare(`DELETE FROM custom_pricing WHERE panel NOT IN (${activePanels.map(() => '?').join(',')})`).run(...activePanels);
+    console.log(`[CLEANUP] Removed ${delCp.changes} orphan custom_pricing rows`);
+  }
 } catch (e) {
   console.warn('[CLEANUP] Orphan plan cleanup warning:', e.message);
 }
@@ -931,6 +950,25 @@ function countPlansInBucket(panel, days) {
 function getPlansInBucket(panel, days) {
   const [min, max] = durationRange(days);
   return db.prepare('SELECT * FROM plans WHERE active = 1 AND panel = ? AND validity >= ? AND validity <= ? ORDER BY price ASC').all(panel, min, max);
+}
+
+// Custom (per-GB) pricing helpers
+function getCustomPricing(panel, bucket) {
+  return db.prepare('SELECT * FROM custom_pricing WHERE panel = ? AND bucket = ?').get(panel, bucket);
+}
+function setCustomPricing(panel, bucket, pricePerGb, minGb, maxGb, validity, active) {
+  const existing = getCustomPricing(panel, bucket);
+  if (existing) {
+    db.prepare('UPDATE custom_pricing SET price_per_gb = ?, min_gb = ?, max_gb = ?, validity = ?, active = ? WHERE id = ?')
+      .run(pricePerGb, minGb, maxGb, validity, active, existing.id);
+  } else {
+    db.prepare('INSERT INTO custom_pricing (panel, bucket, price_per_gb, min_gb, max_gb, validity, active) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(panel, bucket, pricePerGb, minGb, maxGb, validity, active);
+  }
+}
+function isCustomPricingReady(panel, bucket) {
+  const cp = getCustomPricing(panel, bucket);
+  return !!(cp && cp.active && cp.price_per_gb > 0);
 }
 
 function getActivePanels() {
@@ -1681,6 +1719,7 @@ bot.action('free_test', async (ctx) => {
 bot.action(/^select_([\w]+)$/, (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
+  delete userState[ctx.from.id];
   const panelName = ctx.match[1];
   const panel = getPanelByName(panelName);
   if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.', mainMenu());
@@ -1704,6 +1743,7 @@ bot.action(/^select_([\w]+)$/, (ctx) => {
 bot.action(/^duration_([\w]+)_(\d+)$/, (ctx) => {
   safeAnswer(ctx);
   if (isBanned(ctx.from.id)) return;
+  delete userState[ctx.from.id];
   const panelName = ctx.match[1];
   const days = normalizeDuration(ctx.match[2]);
   const panel = getPanelByName(panelName);
@@ -1716,7 +1756,8 @@ bot.action(/^duration_([\w]+)_(\d+)$/, (ctx) => {
 
   // Step 2: plans in this duration bucket
   const plans = getPlansInBucket(panelName, days);
-  if (plans.length === 0) {
+  const customReady = isCustomPricingReady(panelName, days);
+  if (plans.length === 0 && !customReady) {
     return safeEdit(ctx, `📦 *${escapeMarkdown(panel.display_name)} | ${DURATION_LABELS[days]}*\n\n❌ پلنی در این بخش موجود نیست.`, {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard([[b('بازگشت ◀️', `select_${panelName}`, 'back')]]),
@@ -1725,8 +1766,63 @@ bot.action(/^duration_([\w]+)_(\d+)$/, (ctx) => {
   const buttons = plans.map((p) => [
     b(`\u200F${formatNumber(p.price)} تومان • ${p.name}`, `planid_${p.id}`, 'planSelect'),
   ]);
+  if (customReady) {
+    buttons.push([b('📝 سفارشی (حجم دلخواه)', `cbuy_${panelName}_${days}`, 'planSelect')]);
+  }
   buttons.push([b('بازگشت ◀️', `select_${panelName}`, 'back')]);
   safeEdit(ctx, `🧩 *نوع سرویس را انتخاب کن*\n━━━━━━━━━━━━━━━━━━━━\n\n📅 مدت انتخاب‌شده: *${DURATION_LABELS[days]}*\n📊 پنل انتخاب‌شده: *${escapeMarkdown(panel.display_name)}*`, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+// === Custom (user-defined volume) purchase flow ===
+bot.action(/^cbuy_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (isBanned(ctx.from.id)) return;
+  const panelName = ctx.match[1];
+  const days = normalizeDuration(ctx.match[2]);
+  const panel = getPanelByName(panelName);
+  if (!panel) return safeEdit(ctx, '❌ پنل یافت نشد.', mainMenu());
+  const cp = getCustomPricing(panelName, days);
+  if (!cp || !cp.active || cp.price_per_gb <= 0) {
+    return safeEdit(ctx, '❌ خرید سفارشی برای این بخش غیرفعال است.', Markup.inlineKeyboard([
+      [b('بازگشت ◀️', `select_${panelName}`, 'back')],
+    ]));
+  }
+  userState[ctx.from.id] = { action: 'wait_custom_gb', panel: panelName, days };
+  safeEdit(ctx,
+    `📝 *سفارشی (حجم دلخواه)*\n━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `📊 پنل: *${escapeMarkdown(panel.display_name)}*\n` +
+    `📅 مدت: *${DURATION_LABELS[days]}*\n` +
+    `💸 قیمت هر گیگابایت: *${formatNumber(cp.price_per_gb)} تومان*\n\n` +
+    `📏 حجم مجاز: *${cp.min_gb}* تا *${cp.max_gb}* گیگابایت\n\n` +
+    `✏️ حجم مورد نظر خود را به گیگابایت ارسال کنید:`,
+    { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[b('لغو', `select_${panelName}`, 'back')]]) });
+});
+
+// Pay a custom (user-defined volume) order
+bot.action('cpay', async (ctx) => {
+  safeAnswer(ctx);
+  if (isBanned(ctx.from.id)) return;
+  const st = userState[ctx.from.id];
+  if (!st || typeof st !== 'object' || st.action !== 'custom_confirm') {
+    return safeEdit(ctx, '❌ این سفارش منقضی شده است. لطفاً دوباره تلاش کنید.', mainMenu());
+  }
+  const userId = ctx.from.id;
+  const price = st.price;
+  if (getWallet(userId) < price) {
+    delete userState[userId];
+    return ctx.reply('❌ موجودی کیف پول شما کافی نیست.\nلطفاً ابتدا کیف پول خود را شارژ کنید.', mainMenu());
+  }
+
+  delete userState[userId];
+  const loadingMsg = await showLoading(ctx, '⏳ در حال پردازش سفارش...');
+
+  db.prepare('UPDATE users SET wallet = wallet - ? WHERE user_id = ?').run(price, userId);
+  db.prepare('INSERT INTO orders (user_id, plan_name, plan_gb, validity, price, status, panel) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .run(userId, `سفارشی ${st.gb}GB`, st.gb, st.validity, price, 'pending', st.panel);
+
+  const order = db.prepare('SELECT id FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT 1').get(userId);
+  await autoDeliverOrder(order.id, ctx);
+  deleteMessage(ctx, loadingMsg);
 });
 
 bot.action(/^planid_(\d+)$/, (ctx) => {
@@ -2292,6 +2388,31 @@ bot.on('text', async (ctx) => {
       delete adminState[userId];
       ctx.reply(`✅ قیمت پلن به ${formatNumber(price)} تومان تغییر یافت.`);
       return showPlanList(ctx, plan.panel);
+    }
+
+    if (state.action === 'edit_custom_pricing') {
+      const cur = getCustomPricing(state.panel, state.days) || { price_per_gb: 0, min_gb: 1, max_gb: 100, validity: state.days, active: 0 };
+      if (state.field === 'price') {
+        const v = parseInt(ctx.message.text.replace(/[^0-9]/g, ''));
+        if (isNaN(v) || v < 100) return ctx.reply('❌ قیمت نامعتبر است. حداقل ۱۰۰ تومان.');
+        setCustomPricing(state.panel, state.days, v, cur.min_gb, cur.max_gb, cur.validity, cur.active);
+      } else if (state.field === 'min') {
+        const v = parseFloat(ctx.message.text.replace(/[^0-9.]/g, ''));
+        if (isNaN(v) || v <= 0) return ctx.reply('❌ حجم نامعتبر است. یک عدد وارد کنید.');
+        if (v > cur.max_gb) return ctx.reply(`❌ حداقل نمی‌تواند بیشتر از حداکثر (${cur.max_gb} گیگابایت) باشد.`);
+        setCustomPricing(state.panel, state.days, cur.price_per_gb, v, cur.max_gb, cur.validity, cur.active);
+      } else if (state.field === 'max') {
+        const v = parseFloat(ctx.message.text.replace(/[^0-9.]/g, ''));
+        if (isNaN(v) || v <= 0) return ctx.reply('❌ حجم نامعتبر است. یک عدد وارد کنید.');
+        if (v < cur.min_gb) return ctx.reply(`❌ حداکثر نمی‌تواند کمتر از حداقل (${cur.min_gb} گیگابایت) باشد.`);
+        setCustomPricing(state.panel, state.days, cur.price_per_gb, cur.min_gb, v, cur.validity, cur.active);
+      } else if (state.field === 'days') {
+        const v = parseInt(ctx.message.text.replace(/[^0-9]/g, ''));
+        if (isNaN(v) || v < 1) return ctx.reply('❌ مدت نامعتبر است. یک عدد صحیح وارد کنید.');
+        setCustomPricing(state.panel, state.days, cur.price_per_gb, cur.min_gb, cur.max_gb, v, cur.active);
+      }
+      delete adminState[userId];
+      return showCustomPricingMenu(ctx, state.panel, state.days, true);
     }
 
     if (state.action === 'add_panel_name') {
@@ -3031,6 +3152,43 @@ bot.on('text', async (ctx) => {
 
     delete userState[userId];
     ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+    return;
+  }
+
+  // === Custom volume order: user typed their desired GB ===
+  if (userStateObj && typeof userStateObj === 'object' && userStateObj.action === 'wait_custom_gb') {
+    const st = userStateObj;
+    const cp = getCustomPricing(st.panel, st.days);
+    if (!cp || !cp.active || cp.price_per_gb <= 0) {
+      delete userState[userId];
+      return ctx.reply('❌ خرید سفارشی در حال حاضر غیرفعال است.', mainMenu());
+    }
+    let gb = parseFloat(ctx.message.text.replace(/[^0-9.]/g, ''));
+    if (isNaN(gb) || gb <= 0) {
+      return ctx.reply(`❌ حجم نامعتبر است.\nیک عدد بین ${cp.min_gb} و ${cp.max_gb} گیگابایت وارد کنید.`);
+    }
+    gb = Math.round(gb * 100) / 100;
+    if (gb < cp.min_gb || gb > cp.max_gb) {
+      return ctx.reply(`❌ حجم خارج از محدوده مجاز است.\nمجاز: ${cp.min_gb} تا ${cp.max_gb} گیگابایت`);
+    }
+    const price = Math.round(cp.price_per_gb * gb);
+    const wallet = getWallet(userId);
+    const panelData = getPanelByName(st.panel);
+    const panelLabel = panelData ? panelData.display_name : st.panel;
+    userState[userId] = { action: 'custom_confirm', panel: st.panel, days: st.days, validity: cp.validity, gb, price };
+    const text =
+      `📋 *جزئیات سفارش سفارشی*\n\n` +
+      `🔹 نام سرویس: سفارشی ${gb}GB\n` +
+      `🔹 پنل: ${escapeMarkdown(panelLabel)}\n` +
+      `🔹 مدت اعتبار: ${cp.validity} روز\n` +
+      `🔹 حجم: ${gb} گیگابایت\n` +
+      `🔹 قیمت هر گیگ: ${formatNumber(cp.price_per_gb)} تومان\n` +
+      `💰 قیمت نهایی: *${formatNumber(price)} تومان*\n` +
+      `🔹 موجودی کیف پول شما: ${formatNumber(wallet)} تومان`;
+    ctx.reply(text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
+      [b('💳 پرداخت و دریافت سرویس', 'cpay', 'payment')],
+      [b('🔙 بازگشت به انتخاب پلن', `select_${st.panel}`, 'back')],
+    ]) });
     return;
   }
 
@@ -4459,6 +4617,7 @@ bot.action(/^admin_delete_panel_(\d+)$/, async (ctx) => {
     db.prepare('DELETE FROM plans WHERE panel = ?').run(panel.name);
     console.log(`[PANEL DELETE] Auto-deleted ${planCount} plans for panel ${panel.name}`);
   }
+  db.prepare('DELETE FROM custom_pricing WHERE panel = ?').run(panel.name);
 
   db.prepare('DELETE FROM panels WHERE id = ?').run(panelId);
   ctx.reply(`🗑️ پنل ${panel.display_name} و ${planCount} پلن مربوطه حذف شدند.`);
@@ -4520,6 +4679,9 @@ bot.action(/^admin_plans_([\w]+)_(\d+)$/, (ctx) => {
   const buttons = [];
   buttons.push([Markup.button.callback('➕ افزودن پلن جدید', `admin_plan_add_${panel}_${days}`)]);
 
+  const cpReady = isCustomPricingReady(panel, days);
+  buttons.push([Markup.button.callback(`${cpReady ? '🟢' : '⚪️'} قیمت سفارشی (حجم دلخواه)`, `acp_${panel}_${days}`)]);
+
   plans.forEach((p) => {
     buttons.push([
       Markup.button.callback(`✏️ ${p.name}`, `admin_plan_edit_${p.id}`),
@@ -4531,6 +4693,87 @@ bot.action(/^admin_plans_([\w]+)_(\d+)$/, (ctx) => {
   buttons.push([b('بازگشت ◀️', backAction, 'back')]);
 
   safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+});
+
+// === Admin: custom (per-GB) pricing menu ===
+function showCustomPricingMenu(ctx, panel, days, viaReply) {
+  const panelData = getPanelByName(panel);
+  if (!panelData) return safeEdit(ctx, '❌ پنل یافت نشد.', adminMenu());
+  const cp = getCustomPricing(panel, days) || { price_per_gb: 0, min_gb: 1, max_gb: 100, validity: days, active: 0 };
+  const text =
+    `🧮 *قیمت سفارشی (حجم دلخواه)*\n` +
+    `━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `📦 پنل: *${escapeMarkdown(panelData.display_name)}*\n` +
+    `📅 بخش: *${DURATION_LABELS[days]}*\n\n` +
+    `🔹 قیمت هر گیگابایت: ${cp.price_per_gb > 0 ? `*${formatNumber(cp.price_per_gb)} تومان*` : '—'}\n` +
+    `🔹 حداقل حجم: *${cp.min_gb}* گیگابایت\n` +
+    `🔹 حداکثر حجم: *${cp.max_gb}* گیگابایت\n` +
+    `🔹 مدت اعتبار سفارشی: *${cp.validity}* روز\n` +
+    `🔹 وضعیت: ${cp.active ? '🟢 فعال' : '⚪️ غیرفعال'}\n\n` +
+    `💡 کاربر حجم دلخواهش را وارد می‌کند و قیمت = قیمت هر گیگ × حجم.`;
+  const buttons = [
+    [Markup.button.callback('💰 قیمت هر گیگابایت', `acpp_${panel}_${days}`)],
+    [Markup.button.callback('⬇️ حداقل حجم (GB)', `acpm_${panel}_${days}`)],
+    [Markup.button.callback('⬆️ حداکثر حجم (GB)', `acpx_${panel}_${days}`)],
+    [Markup.button.callback('📅 مدت اعتبار (روز)', `acpd_${panel}_${days}`)],
+    [Markup.button.callback(`${cp.active ? '🟢 غیرفعال کردن' : '⚪️ فعال کردن'}`, `acpt_${panel}_${days}`)],
+    [b('بازگشت ◀️', `admin_plans_${panel}_${days}`, 'back')],
+  ];
+  const opts = { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) };
+  if (viaReply) return ctx.reply(text, opts);
+  return safeEdit(ctx, text, opts);
+}
+
+bot.action(/^acp_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panel = ctx.match[1];
+  const days = normalizeDuration(ctx.match[2]);
+  if (!getCustomPricing(panel, days)) setCustomPricing(panel, days, 0, 1, 100, days, 0);
+  showCustomPricingMenu(ctx, panel, days);
+});
+
+bot.action(/^acpp_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  adminState[ADMIN_ID] = { action: 'edit_custom_pricing', field: 'price', panel: ctx.match[1], days: normalizeDuration(ctx.match[2]) };
+  ctx.reply('💰 قیمت هر گیگابایت (تومان) را وارد کنید:\n(مثال: 5500)');
+});
+
+bot.action(/^acpm_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  adminState[ADMIN_ID] = { action: 'edit_custom_pricing', field: 'min', panel: ctx.match[1], days: normalizeDuration(ctx.match[2]) };
+  ctx.reply('⬇️ حداقل حجم مجاز (گیگابایت) را وارد کنید:\n(مثال: 1)');
+});
+
+bot.action(/^acpx_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  adminState[ADMIN_ID] = { action: 'edit_custom_pricing', field: 'max', panel: ctx.match[1], days: normalizeDuration(ctx.match[2]) };
+  ctx.reply('⬆️ حداکثر حجم مجاز (گیگابایت) را وارد کنید:\n(مثال: 500)');
+});
+
+bot.action(/^acpd_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  adminState[ADMIN_ID] = { action: 'edit_custom_pricing', field: 'days', panel: ctx.match[1], days: normalizeDuration(ctx.match[2]) };
+  ctx.reply('📅 مدت اعتبار سفارشی (روز) را وارد کنید:\n(مثال: 31)');
+});
+
+bot.action(/^acpt_([\w]+)_(\d+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const panel = ctx.match[1];
+  const days = normalizeDuration(ctx.match[2]);
+  const cp = getCustomPricing(panel, days);
+  if (!cp || cp.price_per_gb <= 0) {
+    return safeEdit(ctx, '❌ ابتدا قیمت هر گیگابایت را وارد کنید.', Markup.inlineKeyboard([
+      [b('بازگشت ◀️', `acp_${panel}_${days}`, 'back')],
+    ]));
+  }
+  setCustomPricing(panel, days, cp.price_per_gb, cp.min_gb, cp.max_gb, cp.validity, cp.active ? 0 : 1);
+  showCustomPricingMenu(ctx, panel, days);
 });
 
 bot.action(/^admin_plans_([\w]+)$/, (ctx) => {
