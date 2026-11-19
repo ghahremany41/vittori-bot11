@@ -622,7 +622,11 @@ function showPlanList(ctx, panel) {
   });
   buttons.push([b('بازگشت ◀️', `admin_plans_${panel}`, 'back')]);
 
-  safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  const opts = { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) };
+  // From a callback we edit the menu message; from a text handler (edit_plan_*)
+  // there is no callbackQuery and the bot cannot edit the admin's own message.
+  if (ctx.callbackQuery) return safeEdit(ctx, text, opts);
+  return ctx.reply(text, opts);
 }
 
 const adminState = {};
@@ -1258,10 +1262,42 @@ bot.command('renew', (ctx) => {
   const orders = db.prepare("SELECT * FROM orders WHERE user_id = ? AND status = 'delivered' ORDER BY created_at DESC").all(ctx.from.id);
   if (orders.length === 0) return ctx.reply('❌ شما سرویس فعالی ندارید.\nابتدا یک اشتراک خریداری کنید.', mainMenu());
   const latest = orders[0];
-  const plan = getPlanByGbValidity(latest.plan_gb, latest.validity, latest.panel || 'pasarguard');
-  if (!plan) return ctx.reply('❌ پلن یافت نشد.', mainMenu());
-
+  const panelName = latest.panel || 'pasarguard';
+  const plan = getPlanByGbValidity(latest.plan_gb, latest.validity, panelName);
   const wallet = getWallet(ctx.from.id);
+
+  if (!plan) {
+    // No matching preset plan (custom-volume order, or plan edited/removed):
+    // renew through per-GB custom pricing when it is configured for this bucket.
+    const cp = getCustomPricing(panelName, durationBucket(latest.validity));
+    if (cp && cp.active && cp.price_per_gb > 0) {
+      const price = Math.round(cp.price_per_gb * latest.plan_gb);
+      const canPay = wallet >= price;
+      if (canPay) {
+        userState[ctx.from.id] = {
+          action: 'custom_confirm', panel: panelName,
+          days: durationBucket(latest.validity), validity: latest.validity,
+          gb: latest.plan_gb, price,
+        };
+      }
+      return ctx.reply(
+        `♻️ *تمدید سرویس (سفارشی)*\n\n` +
+        `🔹 سرویس قبلی: ${escapeMarkdown(latest.plan_name)}\n` +
+        `🔹 حجم: ${latest.plan_gb} گیگابایت\n` +
+        `🔹 مدت: ${latest.validity} روز\n` +
+        `🔹 قیمت: ${formatNumber(price)} تومان (${formatNumber(cp.price_per_gb)} × ${latest.plan_gb}GB)\n` +
+        `💰 موجودی کیف پول: ${formatNumber(wallet)} تومان\n\n` +
+        (canPay ? `✅ موجودی کافی است` : `❌ موجودی کافی نیست`),
+        { parse_mode: 'Markdown', ...Markup.inlineKeyboard([
+          canPay
+            ? [b(`💳 تمدید - ${formatNumber(price)} تومان`, 'cpay', 'primary')]
+            : [b('💰 افزایش موجودی', 'add_balance', 'addBalance')],
+          [b('بازگشت ◀️', 'back_to_menu', 'back')],
+        ])}
+      );
+    }
+    return ctx.reply('❌ پلن این سرویس دیگر موجود نیست.\nبرای خرید سرویس جدید از منو استفاده کنید.', mainMenu());
+  }
   const canPay = wallet >= plan.price;
 
   ctx.reply(
@@ -1981,7 +2017,7 @@ bot.action('add_balance', (ctx) => {
   if (isBanned(ctx.from.id)) return;
   userState[ctx.from.id] = 'wait_amount';
   safeEdit(ctx,
-    `💰 مبلغ مورد نظر برای شارژ را وارد کنید:\nحداقل: ${formatNumber(minCharge)} تومان\nحاکثر: ${formatNumber(maxCharge)} تومان`,
+    `💰 مبلغ مورد نظر برای شارژ را وارد کنید:\nحداقل: ${formatNumber(minCharge)} تومان\nحداکثر: ${formatNumber(maxCharge)} تومان`,
     Markup.inlineKeyboard([[b('بازگشت ◀️', 'back_to_menu', 'back')]])
   );
 });
