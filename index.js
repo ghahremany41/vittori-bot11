@@ -4224,17 +4224,45 @@ bot.action(/^admin_user_(\d+)$/, (ctx) => {
   showUserDetail(ctx, userId);
 });
 
+// === Users list: sorting & filtering (admin) ===
+let adminUsersSort = 'newest';
+let adminUsersFilter = 'all';
+const USER_SORTS = {
+  newest: { label: '🕓 جدیدترین', sql: 'u.created_at DESC, u.user_id DESC' },
+  oldest: { label: '🕔 قدیمی‌ترین', sql: 'u.created_at ASC, u.user_id ASC' },
+  wallet_desc: { label: '💰 موجودی: زیاد به کم', sql: 'u.wallet DESC, u.user_id DESC' },
+  wallet_asc: { label: '💰 موجودی: کم به زیاد', sql: 'u.wallet ASC, u.user_id ASC' },
+  spent_desc: { label: '🛒 بیشترین خرید', sql: 'spent DESC, u.wallet DESC' },
+};
+const USER_FILTERS = {
+  all: { label: 'همه', where: '' },
+  banned: { label: '🚫 مسدودها', where: 'WHERE u.banned = 1' },
+  zero: { label: '💸 بدون موجودی', where: 'WHERE u.wallet <= 0' },
+  has_balance: { label: '💰 با موجودی', where: 'WHERE u.wallet > 0' },
+};
+
 function showUsers(ctx, page) {
   const perPage = 10;
-  const total = db.prepare('SELECT COUNT(*) as c FROM users').get().c;
-  const totalPages = Math.ceil(total / perPage);
-  const users = db.prepare('SELECT * FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?').all(perPage, page * perPage);
+  const sort = USER_SORTS[adminUsersSort] || USER_SORTS.newest;
+  const filter = USER_FILTERS[adminUsersFilter] || USER_FILTERS.all;
+  const from = `FROM users u ${filter.where}`;
+  const total = db.prepare(`SELECT COUNT(*) as c ${from}`).get().c;
+  const totalWallet = db.prepare(`SELECT COALESCE(SUM(u.wallet), 0) as s ${from}`).get().s;
+  const totalPages = Math.max(1, Math.ceil(total / perPage));
+  if (page >= totalPages) page = totalPages - 1;
+  if (page < 0) page = 0;
+  const users = db.prepare(
+    `SELECT u.*, (SELECT COALESCE(SUM(o.price), 0) FROM orders o WHERE o.user_id = u.user_id AND o.status = 'delivered') as spent ${from} ORDER BY ${sort.sql} LIMIT ? OFFSET ?`
+  ).all(perPage, page * perPage);
 
-  let text = `👥 *کاربران* (${page + 1}/${totalPages}) | کل: ${total}\n\n`;
+  let text = `👥 *کاربران* (${page + 1}/${totalPages}) | کل: ${total}\n`;
+  text += `🔀 مرتب‌سازی: ${sort.label}\n`;
+  text += `🎛 فیلتر: ${filter.label}\n`;
+  text += `💰 جمع موجودی: ${formatNumber(totalWallet)} تومان\n\n`;
   users.forEach((u, i) => {
     const status = u.banned ? '🚫' : '✅';
     const displayName = u.username ? `@${u.username}` : (u.first_name || `${u.user_id}`);
-    text += `${i + 1}. ${status} ${escapeMarkdown(displayName)} | 💰${formatNumber(u.wallet)}\n`;
+    text += `${page * perPage + i + 1}. ${status} ${escapeMarkdown(displayName)} | 💰${formatNumber(u.wallet)}\n`;
   });
 
   const buttons = users.map((u) => {
@@ -4246,10 +4274,52 @@ function showUsers(ctx, page) {
   if (page > 0) nav.push(Markup.button.callback('◀️ قبلی', `admin_users_page_${page - 1}`));
   if (page < totalPages - 1) nav.push(Markup.button.callback('بعدی ▶️', `admin_users_page_${page + 1}`));
   if (nav.length) buttons.push(nav);
+  buttons.push([
+    Markup.button.callback(`🔀 ${sort.label}`, 'admin_users_sortmenu'),
+    Markup.button.callback(`🎛 ${filter.label}`, 'admin_users_filtermenu'),
+  ]);
   buttons.push([b('بازگشت ◀️', 'back_to_menu', 'back')]);
 
-  safeEdit(ctx,text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
+  safeEdit(ctx, text, { parse_mode: 'Markdown', ...Markup.inlineKeyboard(buttons) });
 }
+
+function showUsersSubmenu(ctx, title, map, current, prefix) {
+  const buttons = Object.entries(map).map(([key, v]) => [
+    Markup.button.callback(`${key === current ? '✅ ' : ''}${v.label}`, `${prefix}${key}`),
+  ]);
+  buttons.push([b('بازگشت ◀️', 'admin_users', 'back')]);
+  safeEdit(ctx, title, Markup.inlineKeyboard(buttons));
+}
+
+bot.action('admin_users_sortmenu', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  showUsersSubmenu(ctx, '🔀 مرتب‌سازی کاربران:', USER_SORTS, adminUsersSort, 'admin_users_sort_');
+});
+
+bot.action(/^admin_users_sort_(\w+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const key = ctx.match[1];
+  if (!USER_SORTS[key]) return showUsers(ctx, 0);
+  adminUsersSort = key;
+  showUsers(ctx, 0);
+});
+
+bot.action('admin_users_filtermenu', (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  showUsersSubmenu(ctx, '🎛 فیلتر کاربران:', USER_FILTERS, adminUsersFilter, 'admin_users_filter_');
+});
+
+bot.action(/^admin_users_filter_(\w+)$/, (ctx) => {
+  safeAnswer(ctx);
+  if (ctx.from.id !== ADMIN_ID) return;
+  const key = ctx.match[1];
+  if (!USER_FILTERS[key]) return showUsers(ctx, 0);
+  adminUsersFilter = key;
+  showUsers(ctx, 0);
+});
 
 function buildUserDetailText(userId) {
   const user = db.prepare('SELECT * FROM users WHERE user_id = ?').get(userId);
