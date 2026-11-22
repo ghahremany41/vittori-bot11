@@ -2022,6 +2022,55 @@ bot.action('add_balance', (ctx) => {
   );
 });
 
+// === Broadcast: send admin's message (text/media/forward) to all users as-is ===
+async function runBroadcast(ctx) {
+  const msg = ctx.message;
+  const allUsers = db.prepare('SELECT user_id FROM users WHERE banned = 0').all();
+  let sent = 0;
+  let failed = 0;
+  ctx.reply(`📢 ارسال پیام همگانی شروع شد...\n👥 تعداد کاربران: ${allUsers.length}`);
+  // If the admin forwarded a message, keep the "Forwarded from..." header
+  const isForwarded = !!(msg.forward_origin || msg.forward_from || msg.forward_from_chat || msg.forward_sender_name);
+  for (const u of allUsers) {
+    try {
+      if (isForwarded) {
+        await bot.telegram.forwardMessage(u.user_id, msg.chat.id, msg.message_id);
+      } else if (msg.text) {
+        // No wrapper/prefix — send the text exactly as written
+        try {
+          await bot.telegram.sendMessage(u.user_id, msg.text, { parse_mode: 'Markdown' });
+        } catch (_) {
+          await bot.telegram.sendMessage(u.user_id, msg.text);
+        }
+      } else {
+        // photo / video / document / sticker etc. — copy without forward header
+        await bot.telegram.copyMessage(u.user_id, msg.chat.id, msg.message_id);
+      }
+      sent++;
+    } catch (_) { failed++; }
+    // Rate limiting: pause every 20 messages to avoid Telegram flood
+    if (sent > 0 && sent % 20 === 0) await new Promise(r => setTimeout(r, 1500));
+  }
+  ctx.reply(`📢 ارسال پیام همگانی کامل شد.\n✅ موفق: ${sent}\n❌ ناموفق: ${failed}`);
+  delete adminState[ctx.from.id];
+}
+
+// Intercept ANY admin message (text, photo, video, document, forward...) during broadcast state
+bot.use(async (ctx, next) => {
+  if (ctx.message && ctx.from && ctx.from.id === ADMIN_ID &&
+      adminState[ADMIN_ID] && adminState[ADMIN_ID].action === 'broadcast') {
+    try {
+      await runBroadcast(ctx);
+    } catch (err) {
+      console.error('Broadcast error:', err);
+      ctx.reply('❌ خطا در ارسال پیام همگانی.');
+      delete adminState[ADMIN_ID];
+    }
+    return;
+  }
+  return next();
+});
+
 // Feature 1: Handle photo for welcome image
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id;
@@ -2260,30 +2309,6 @@ bot.on('text', async (ctx) => {
       });
       buttons.push([b('بازگشت ◀️', 'back_to_menu', 'back')]);
       return ctx.reply(text, Markup.inlineKeyboard(buttons));
-    }
-
-    if (state.action === 'broadcast') {
-      const allUsers = db.prepare('SELECT user_id FROM users WHERE banned = 0').all();
-      let sent = 0;
-      let failed = 0;
-      ctx.reply(`📢 ارسال پیام همگانی شروع شد...\n👥 تعداد کاربران: ${allUsers.length}`);
-      for (const u of allUsers) {
-        try {
-          await bot.telegram.sendMessage(u.user_id, `📢 *پیام مدیریت*\n\n${ctx.message.text}`, { parse_mode: 'MarkdownV2' });
-          sent++;
-        } catch (err) {
-          // If MarkdownV2 fails, try plain text without formatting
-          try {
-            await bot.telegram.sendMessage(u.user_id, `📢 پیام مدیریت\n\n${ctx.message.text}`);
-            sent++;
-          } catch (_) { failed++; }
-        }
-        // Rate limiting: pause every 20 messages to avoid Telegram flood
-        if (sent > 0 && sent % 20 === 0) await new Promise(r => setTimeout(r, 1500));
-      }
-      ctx.reply(`📢 ارسال پیام همگانی کامل شد.\n✅ موفق: ${sent}\n❌ ناموفق: ${failed}`);
-      delete adminState[userId];
-      return;
     }
 
     if (state.action === 'manual_charge') {
@@ -4433,7 +4458,7 @@ bot.action('admin_broadcast', (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
   adminState[ADMIN_ID] = { action: 'broadcast' };
-  safeEdit(ctx,'📢 متن پیام همگانی را ارسال کنید:');
+  safeEdit(ctx,'📢 پیام همگانی را ارسال کنید:\n(متن، عکس، ویدیو یا پیام فوروارد شده — همان‌طور که هست برای کاربران ارسال می‌شود)');
 });
 
 bot.action('admin_panels', async (ctx) => {
