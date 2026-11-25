@@ -631,7 +631,6 @@ function showPlanList(ctx, panel) {
 
 const adminState = {};
 const userState = {};
-let blockedPurgeRunning = false;
 // Maps admin's forwarded support message_id -> userId (for admin replies)
 const adminForwardMap = new Map();
 let botOff = false;
@@ -1054,7 +1053,6 @@ function adminMenu() {
       b(`👥 کاربران (${totalUsers})`, 'admin_users', 'users'),
       b(`🔍 جستجوی کاربر`, 'admin_search_user', 'search'),
     ],
-    [b('🧹 حذف مسدودکننده‌ها', 'admin_purge_blocked_confirm', 'users')],
     [
       b(`📢 پیام همگانی`, 'admin_broadcast', 'broadcast'),
       b(`${botStatus}`, 'admin_toggle_bot', 'botStatus'),
@@ -2055,79 +2053,6 @@ async function runBroadcast(ctx) {
   }
   ctx.reply(`📢 ارسال پیام همگانی کامل شد.\n✅ موفق: ${sent}\n❌ ناموفق: ${failed}`);
   delete adminState[ctx.from.id];
-}
-
-function isBlockedError(err) {
-  if (err?.response?.error_code !== 403) return false;
-  const description = String(err.response.description || '').toLowerCase();
-  return description.includes('bot was blocked by the user');
-}
-
-async function purgeBlockedUsers(ctx) {
-  if (blockedPurgeRunning) {
-    safeAnswer(ctx);
-    return safeEdit(ctx, '⏳ عملیات پاکسازی در حال اجراست.');
-  }
-  blockedPurgeRunning = true;
-  safeAnswer(ctx);
-
-  const total = db.prepare('SELECT COUNT(*) as c FROM users WHERE user_id != ?').get(ADMIN_ID).c;
-  let checked = 0;
-  let deleted = 0;
-  let skipped = 0;
-  let errors = 0;
-  let lastId = 0;
-  let progressAt = 0;
-
-  const progress = async (force = false) => {
-    if (!force && checked - progressAt < 25) return;
-    progressAt = checked;
-    await safeEdit(ctx, `🧹 بررسی ${checked} از ${total}\n✅ حذف: ${deleted}`);
-  };
-
-  try {
-    for (;;) {
-      const users = db.prepare('SELECT user_id FROM users WHERE user_id > ? ORDER BY user_id LIMIT 200').all(lastId);
-      if (users.length === 0) break;
-      for (const u of users) {
-        lastId = u.user_id;
-        if (u.user_id === ADMIN_ID) continue;
-        checked++;
-        let blocked = false;
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            await bot.telegram.getChat(u.user_id);
-            break;
-          } catch (err) {
-            if (isBlockedError(err)) { blocked = true; break; }
-            if (err?.response?.error_code === 429) {
-              if (attempt < 2) {
-                const retryAfter = Number(err.response.parameters?.retry_after) || 1;
-                await new Promise(r => setTimeout(r, (retryAfter + 1) * 1000));
-                continue;
-              }
-              errors++;
-            }
-            else skipped++;
-            break;
-          }
-        }
-        if (blocked) {
-          db.prepare('DELETE FROM users WHERE user_id = ?').run(u.user_id);
-          deleted++;
-        }
-        if (checked % 25 === 0) await new Promise(r => setTimeout(r, 1000));
-        await progress();
-      }
-    }
-    await progress(true);
-    await safeEdit(ctx, `✅ پاکسازی کامل شد.\n👥 بررسی: ${checked}\n🗑 حذف: ${deleted}\n⏭ رد: ${skipped}\n⚠️ خطا: ${errors}`);
-  } catch (err) {
-    console.error('Blocked purge error:', err);
-    await safeEdit(ctx, `❌ خطا در پاکسازی: ${err.message}`);
-  } finally {
-    blockedPurgeRunning = false;
-  }
 }
 
 // Intercept ANY admin message (text, photo, video, document, forward...) during broadcast state
@@ -4299,20 +4224,6 @@ bot.action('admin_users', (ctx) => {
   safeAnswer(ctx);
   if (ctx.from.id !== ADMIN_ID) return;
   showUsers(ctx, 0);
-});
-
-bot.action('admin_purge_blocked_confirm', (ctx) => {
-  safeAnswer(ctx);
-  if (ctx.from.id !== ADMIN_ID) return;
-  safeEdit(ctx, '⚠️ کاربرانی که ربات را مسدود کردهاند حذف میشوند.\nسفارشات و شارژها باقی میمانند.\n\nادامه؟', Markup.inlineKeyboard([
-    [Markup.button.callback('✅ بله، پاک کن', 'admin_purge_blocked_run')],
-    [b('❌ انصراف', 'admin_users', 'back')],
-  ]));
-});
-
-bot.action('admin_purge_blocked_run', (ctx) => {
-  if (ctx.from.id !== ADMIN_ID) return;
-  purgeBlockedUsers(ctx);
 });
 
 bot.action(/^admin_users_page_(\d+)$/, (ctx) => {
